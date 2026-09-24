@@ -24,7 +24,7 @@ Hand-off: the researcher adds works to Inbox/Zotero import queue.md. Tick the li
 2. Copy the folder ~/Zotero to a backup location.
 3. Start Zotero.
 4. In Zotero, open Settings > Advanced. Select "Allow other applications on this computer to communicate with Zotero".
-5. Open ~/.config/opencode/zotero.env in a text editor. Type your email address after ZOTERO_CONTACT_EMAIL=. Save the file.
+5. Open ~/.config/opencode/zotero.env. Make sure that ZOTERO_CONTACT_EMAIL is tiagojacinto@med.up.pt. If you have an NCBI API key, type it after NCBI_API_KEY=.
 6. Open a terminal. Type `cd ~/Projects/zotero-local-mcp && uv sync && uv run pytest -q`. Make sure that all tests pass.
 7. Type `ZOTERO_MCP_ENV=~/.config/opencode/zotero.env uv run zotero-local-mcp --check`. Make sure that the result shows `"zotero": "reachable"` and no vocabulary problems.
 8. Type `opencode auth login`. Select OpenRouter. Paste the OpenRouter key.
