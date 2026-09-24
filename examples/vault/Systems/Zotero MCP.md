@@ -6,7 +6,7 @@ Two AI agents in OpenCode that work on the Zotero library on [[ahab]]: a librari
 - Settings (email, API keys, paths): ~/.config/opencode/zotero.env
 - OpenCode config: ~/.config/opencode/opencode.jsonc (model, servers, agents, permissions). In the vault: Notes/.opencode/opencode.jsonc
 - Journal of all library changes: ~/.local/share/zotero-local-mcp/journal/
-- Model: OpenRouter, z-ai/glm-5.3-flash. Change it with /models in OpenCode.
+- Models (OpenCode Go): librarian glm-5.3-flash, researcher mimo-v2.6-pro; deepseek-v4-pro for the hardest syntheses. Change with /models. OpenRouter is the fallback. Do not use Grok, GPT Luna or Muse Spark (data retention or training).
 
 ## Roles
 
@@ -27,8 +27,8 @@ Hand-off: the researcher adds works to Inbox/Zotero import queue.md. Tick the li
 5. Open ~/.config/opencode/zotero.env. Make sure that ZOTERO_CONTACT_EMAIL is tiagojacinto@med.up.pt. If you have an NCBI API key, type it after NCBI_API_KEY=.
 6. Open a terminal. Type `cd ~/Projects/zotero-local-mcp && uv sync && uv run pytest -q`. Make sure that all tests pass.
 7. Type `ZOTERO_MCP_ENV=~/.config/opencode/zotero.env uv run zotero-local-mcp --check`. Make sure that the result shows `"zotero": "reachable"` and no vocabulary problems.
-8. Type `opencode auth login`. Select OpenRouter. Paste the OpenRouter key.
-9. In OpenRouter, open Settings > Privacy. Turn on zero data retention.
+8. Type `opencode auth login`. Make sure that OpenCode Go is signed in. OpenRouter is optional (fallback).
+9. If you use OpenRouter: open Settings > Privacy and turn on zero data retention.
 
 ## Weekly alerts (optional)
 

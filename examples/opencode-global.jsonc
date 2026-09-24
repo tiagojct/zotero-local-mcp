@@ -1,8 +1,10 @@
 // ~/.config/opencode/opencode.jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  // Change at any time with /models. OpenRouter key: opencode auth login -> OpenRouter
-  "model": "openrouter/z-ai/glm-5.3-flash",
+  // OpenCode Go (subscription). Change at any time with /models.
+  // OpenRouter stays available as a fallback: openrouter/z-ai/glm-5.3-flash
+  "model": "opencode-go/glm-5.3-flash",
+  "small_model": "opencode-go/glm-5.3-flash",
   // Shared Zotero rules, loaded in every session
   "instructions": ["~/Notes/Systems/Zotero agent.md"],
   "mcp": {
@@ -39,6 +41,8 @@
     "librarian": {
       "description": "Manages the Zotero library: tags, imports, metadata, duplicates, retractions, PDFs. No web.",
       "mode": "primary",
+      // Precise tool use, high Go allowance
+      "model": "opencode-go/glm-5.3-flash",
       "prompt": "{file:~/Notes/Systems/Zotero librarian.md}",
       "permission": {
         "zotero_*": "ask",
@@ -66,6 +70,8 @@
     "researcher": {
       "description": "Research assistant: PubMed/OpenAlex search, citation graph, literature notes, syntheses, manuscripts. Cannot change the library.",
       "mode": "primary",
+      // Stronger reasoning for syntheses; for the hardest ones switch to opencode-go/deepseek-v4-pro
+      "model": "opencode-go/mimo-v2.6-pro",
       "prompt": "{file:~/Notes/Systems/Zotero researcher.md}",
       "permission": {
         "zotero_*": "deny",
