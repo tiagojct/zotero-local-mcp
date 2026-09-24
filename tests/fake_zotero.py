@@ -34,6 +34,7 @@ class FakeZotero:
         self.auth_prompts = 0
         self.write_requests = 0
         self.seen_headers: list[dict] = []
+        self.fulltext: dict[str, dict] = {}
 
     # ------------------------------------------------------------ fixtures
 
@@ -111,6 +112,11 @@ class FakeZotero:
                 keys = q.get("itemKey", "").split(",") if "itemKey" in q else None
                 items = [i for i in live if keys is None or i["key"] in keys]
                 return resp(200, [self._wrap(i) for i in items])
+            if rest.startswith("items/") and rest.endswith("/fulltext"):
+                key = rest.split("/")[1]
+                if key not in self.fulltext:
+                    return resp(404, {"error": "no full text"})
+                return resp(200, self.fulltext[key])
             if rest.startswith("items/") and rest.endswith("/children"):
                 parent = rest.split("/")[1]
                 return resp(200, [self._wrap(i) for i in live if i.get("parentItem") == parent])

@@ -197,27 +197,28 @@ class Library:
         }
 
     async def find(self, query: str | None = None, fulltext: bool = False,
-                   collection: str | None = None, tag: str | None = None,
+                   collection: str | None = None, tags: list[str] | None = None,
                    item_type: str | None = None, missing_facet: str | None = None,
                    untagged: bool = False, outside_vocabulary: bool = False,
                    detail: bool = False, limit: int = 50, offset: int = 0) -> dict:
         items = await self.regular_items(collection, query, fulltext)
+        want = set(tags or [])
         vocab = self.vocab.get() if outside_vocabulary else None
         if outside_vocabulary and vocab is None:
             raise ZoteroError("outside_vocabulary needs the vocabulary file.")
 
         def keep(i: dict) -> bool:
             d = i["data"]
-            tags = manual(d)
-            if tag and tag not in tags and tag not in automatic(d):
+            tags_here = manual(d)
+            if want and not want <= set(tags_here) | set(automatic(d)):
                 return False
             if item_type and d.get("itemType") != item_type:
                 return False
-            if untagged and tags:
+            if untagged and tags_here:
                 return False
-            if missing_facet and any(facet_of(t) == missing_facet for t in tags):
+            if missing_facet and any(facet_of(t) == missing_facet for t in tags_here):
                 return False
-            if vocab and all(vocab.allows(t) for t in tags):
+            if vocab and all(vocab.allows(t) for t in tags_here):
                 return False
             return True
 
@@ -257,6 +258,42 @@ class Library:
                                   "filename": cd.get("filename") or cd.get("path")})
         out["notes"], out["attachments"] = notes, files
         return out
+
+    async def get_fulltext(self, key: str, offset: int = 0, max_chars: int = 30000) -> dict:
+        """Text that Zotero indexed from the item's PDF (or other attachment)."""
+        item = await self.z.item(key)
+        if item["data"].get("itemType") == "attachment":
+            atts = [item]
+        else:
+            atts = [c for c in await self.z.children(key)
+                    if c["data"].get("itemType") == "attachment"]
+        atts.sort(key=lambda a: a["data"].get("contentType") != "application/pdf")
+        max_chars = max(1000, min(max_chars, 60000))
+        for a in atts:
+            try:
+                ft = await self.z.get_json(f"items/{a['key']}/fulltext")
+            except ZoteroError as exc:
+                if str(exc).startswith("Not found"):
+                    continue
+                raise
+            text = ft.get("content") or ""
+            end = offset + max_chars
+            return {
+                "key": key,
+                "attachment": a["key"],
+                "attachment_title": a["data"].get("title"),
+                "total_chars": len(text),
+                "offset": offset,
+                "next_offset": end if end < len(text) else None,
+                "indexed_pages": ft.get("indexedPages"),
+                "total_pages": ft.get("totalPages"),
+                "text": text[offset:end],
+            }
+        raise ZoteroError(
+            "No indexed full text for this item. In Zotero, open the PDF once so WebDAV "
+            "downloads it, then right-click the attachment and choose Reindex Item."
+            if atts else "This item has no attachment."
+        )
 
     async def list_tags(self, facet: str | None = None, outside_vocabulary: bool = False,
                         include_automatic: bool = False, min_items: int = 1) -> dict:

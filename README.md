@@ -20,7 +20,7 @@ It talks only to Zotero's local API on `127.0.0.1:23119`. It needs no zotero.org
 | status | tag_items |
 | library_overview | rename_tags |
 | find_items | remove_tags |
-| get_item | remove_automatic_tags |
+| get_item, get_fulltext | remove_automatic_tags |
 | list_tags | set_citekeys |
 | get_vocabulary | update_fields |
 | list_collections | file_items, create_collection |

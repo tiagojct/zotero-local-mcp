@@ -318,3 +318,27 @@ async def test_key_is_not_reused_across_databases(lib, fake):
     assert lib.z._key != old_key
     res = await lib.tag_items([{"key": "BBBB2222", "add": ["topic/asthma"]}], dry_run=False)
     assert res["applied"] == 1 and fake.auth_prompts == 2
+
+
+async def test_fulltext_prefers_pdf_and_pages(lib, fake):
+    html_att = fake.add_item(itemType="attachment", parentItem="AAAA1111", title="Snapshot",
+                             contentType="text/html")
+    pdf = fake.add_item(itemType="attachment", parentItem="AAAA1111", title="Full Text PDF",
+                        contentType="application/pdf")
+    fake.fulltext[html_att] = {"content": "html text", "indexedChars": 9, "totalChars": 9}
+    fake.fulltext[pdf] = {"content": "x" * 2500, "indexedPages": 3, "totalPages": 3}
+    part = await lib.get_fulltext("AAAA1111", max_chars=1000)
+    assert part["attachment"] == pdf and part["total_chars"] == 2500 and part["next_offset"] == 1000
+    last = await lib.get_fulltext("AAAA1111", offset=2000, max_chars=1000)
+    assert last["text"] == "x" * 500 and last["next_offset"] is None
+    with pytest.raises(ZoteroError, match="no attachment"):
+        await lib.get_fulltext("CCCC3333")
+    fake.add_item(itemType="attachment", parentItem="CCCC3333", title="PDF", contentType="application/pdf")
+    with pytest.raises(ZoteroError, match="Reindex"):
+        await lib.get_fulltext("CCCC3333")
+
+
+async def test_find_by_several_tags(lib):
+    assert (await lib.find(tags=["Asthma", "status/read"]))["total"] == 1
+    assert (await lib.find(tags=["Asthma", "status/to-read"]))["total"] == 0
+    assert (await lib.find(tags=["Spirometry"]))["items"][0]["key"] == "AAAA1111"  # automatic tag

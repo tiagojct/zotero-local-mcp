@@ -39,12 +39,15 @@ Rules for AI agents (OpenCode, Claude Code) that work on the Zotero library thro
 - Format: first author surname and year (jacinto2026). Collisions get a, b, c. Use set_citekeys.
 - Do not change an existing key unless Tiago asks (force=true).
 
-## Literature notes
+## Literature notes (one item)
 
 - Folder: Resources/Zotero/. File name: the citekey (jacinto2026.md).
 - Create a note only when Tiago asks. Ask before creating more than 10 notes.
-- Use get_item for the data. Do not copy the abstract in full.
-- Write the summary from the abstract and the Zotero notes. If you did not read the full text, write "(from abstract)" after the summary. Do not invent results or numbers.
+- If the item has no citekey, call set_citekeys for that item first (dry run, then apply).
+- Use get_item for the data and get_fulltext for the text. Long texts come in parts (next_offset).
+- Write the summary from the full text when it exists. If there is no indexed full text, use the abstract and the Zotero notes, and write "(from abstract)" after the summary.
+- Do not copy the abstract in full. Do not invent results or numbers. Give page numbers for quotes when the text shows them.
+- If a note for the citekey exists, do not overwrite it. Add a dated section or ask.
 
 Template:
 
@@ -77,3 +80,18 @@ created: YYYY-MM-DD
 
 - status: the status/ tag without the prefix (same values as the Kindle notes).
 - tags: the topic/, method/ and type/ tags from Zotero, as a YAML list without #.
+
+## Topic syntheses (several items)
+
+1. Search with find_items: tags (for example ["topic/feno"]) and/or query (fulltext=true searches the PDFs too), with detail=true.
+2. Show Tiago the list: citekey, year, title, type/ tag. If there are more than 15 items, ask which to include.
+3. Make sure every included item has a citekey (set_citekeys).
+4. Read the abstracts. Read full texts (get_fulltext) only for the items Tiago selects, or when the abstract does not answer the question.
+5. Write the note in Workshop/ unless Tiago names another folder. Use a plain title in the language of the request.
+6. Structure: scope and question; synthesis by theme; disagreements; gaps; a table of included items (citekey, year, design, main finding, source: full text or abstract).
+7. Cite with [@citekey] after each claim. Every claim must come from an included item. Do not cite references that are not in the library. Put suggested extra searches at the end.
+8. If a literature note exists (Resources/Zotero/citekey.md), use it and link it as [[citekey]].
+
+## Questions about the library
+
+- For questions such as "what do I have on X" or "which papers support Y", answer in the chat with citekeys, year and one line per item. Do not create a file unless Tiago asks.

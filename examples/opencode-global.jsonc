@@ -21,6 +21,7 @@
     "zotero_library_overview": "allow",
     "zotero_find_items": "allow",
     "zotero_get_item": "allow",
+    "zotero_get_fulltext": "allow",
     "zotero_list_tags": "allow",
     "zotero_get_vocabulary": "allow",
     "zotero_list_collections": "allow",

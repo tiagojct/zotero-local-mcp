@@ -86,7 +86,7 @@ async def find_items(
     query: str | None = None,
     fulltext: bool = False,
     collection: str | None = None,
-    tag: str | None = None,
+    tags: list[str] | None = None,
     item_type: str | None = None,
     missing_facet: str | None = None,
     untagged: bool = False,
@@ -97,12 +97,12 @@ async def find_items(
 ) -> dict:
     """Search top-level items (newest first). Filters combine.
     query: title/creator/year search (fulltext=true searches all fields and PDFs).
-    collection: collection key. tag: exact tag. item_type: e.g. journalArticle, book.
+    collection: collection key. tags: items must have all of these tags. item_type: e.g. journalArticle, book.
     missing_facet: items with no tag of that facet, e.g. 'topic'.
     untagged: items with no manual tags. outside_vocabulary: items with tags not in the vocabulary.
     detail=true adds abstract, venue, DOI and automatic tags (use it when proposing tags).
     For missing_facet or untagged batches, keep offset=0: tagged items drop out of the results."""
-    return await lib().find(query, fulltext, collection, tag, item_type, missing_facet,
+    return await lib().find(query, fulltext, collection, tags, item_type, missing_facet,
                             untagged, outside_vocabulary, detail, limit, offset)
 
 
@@ -112,6 +112,15 @@ async def get_item(key: str) -> dict:
     """Full record of one item: fields, all tags, collections, child notes (as text),
     attachments and a zotero:// link."""
     return await lib().get_item(key)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def get_fulltext(key: str, offset: int = 0, max_chars: int = 30000) -> dict:
+    """Full text that Zotero indexed from the item's PDF (key of the item or the attachment).
+    Long texts come in parts: call again with offset=next_offset until next_offset is null.
+    Use it for literature notes and syntheses; it costs many tokens, so read only what is needed."""
+    return await lib().get_fulltext(key, offset, max_chars)
 
 
 @mcp.tool(annotations=READ)
