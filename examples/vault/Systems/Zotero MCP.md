@@ -18,7 +18,7 @@ Local MCP server that lets an AI agent (OpenCode, Claude Code) read and edit the
 6. Type `ZOTERO_VOCAB="$HOME/Notes/Systems/Zotero tags.md" uv run zotero-local-mcp --check`. Make sure that the result shows `"zotero": "reachable"` and no vocabulary problems.
 7. Type `opencode auth login`. Select OpenRouter. Paste the OpenRouter key.
 8. In OpenRouter, open Settings > Privacy. Turn on zero data retention.
-9. Delete ~/Projects/zotero-local-mcp.tar.gz.
+9. Delete the files ~/Projects/zotero-local-mcp.tar.gz and ~/Projects/zotero-local-mcp-v2.tar.gz.
 
 ## First test
 
