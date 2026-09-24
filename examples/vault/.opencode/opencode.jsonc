@@ -1,0 +1,13 @@
+// Notes/.opencode/opencode.jsonc — applies when OpenCode starts inside the vault.
+{
+  "$schema": "https://opencode.ai/config.json",
+  // OpenCode does not read .claude/CLAUDE.md on its own, so load the vault rules explicitly.
+  "instructions": [
+    "~/Notes/.claude/CLAUDE.md",
+    "~/Notes/Systems/Zotero agent.md"
+  ],
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
+  }
+}

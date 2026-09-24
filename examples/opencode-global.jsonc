@@ -1,0 +1,29 @@
+// ~/.config/opencode/opencode.jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Change at any time with /models. Add the key once with: opencode auth login -> OpenRouter
+  "model": "openrouter/z-ai/glm-5.3-flash",
+  "mcp": {
+    "zotero": {
+      "type": "local",
+      "command": ["uv", "run", "--directory", "/Users/you/Projects/zotero-local-mcp", "zotero-local-mcp"],
+      "environment": {
+        "ZOTERO_VOCAB": "/Users/you/Notes/Systems/Zotero tags.md"
+      },
+      "enabled": true,
+      "timeout": 20000
+    }
+  },
+  "permission": {
+    // Last matching rule wins: every Zotero tool asks, then the read-only ones are allowed.
+    "zotero_*": "ask",
+    "zotero_status": "allow",
+    "zotero_library_overview": "allow",
+    "zotero_find_items": "allow",
+    "zotero_get_item": "allow",
+    "zotero_list_tags": "allow",
+    "zotero_get_vocabulary": "allow",
+    "zotero_list_collections": "allow",
+    "zotero_history": "allow"
+  }
+}

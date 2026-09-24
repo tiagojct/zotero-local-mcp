@@ -1,0 +1,650 @@
+"""Library operations behind the MCP tools.
+
+Rules that every write follows:
+- dry_run=True by default: the call returns a preview and writes nothing;
+- tags that are added must exist in the vocabulary file (system tags start with "_");
+- each item write carries the item version, so newer edits are never overwritten
+  (on a version conflict the item is re-read and the change re-applied once);
+- every applied write is recorded in the journal and can be undone;
+- nothing is ever deleted: items go to the trash, tags are removed from items.
+
+Tag operations cover top-level regular items (not notes, attachments or annotations).
+"""
+
+from __future__ import annotations
+
+import html
+import re
+from collections import Counter
+from typing import Any, Callable
+
+import markdown as md
+
+from .citekey import base_key, current_key, unique_key, with_key, year_of
+from .client import LocalZotero, ZoteroError
+from .config import Settings
+from .journal import Journal
+from .vocab import VocabularyStore, facet_of
+
+NON_REGULAR = {"note", "attachment", "annotation"}
+PREVIEW_LIMIT = 60
+PROTECTED_FIELDS = {
+    "key", "version", "tags", "collections", "relations", "deleted", "itemType",
+    "parentItem", "dateAdded", "dateModified",
+}
+
+Editor = Callable[[dict], "dict | None"]
+
+
+class Skip(Exception):
+    """Raised by an editor to leave one item unchanged, with a reason."""
+
+
+# ---------------------------------------------------------------- helpers
+
+def ttype(t: dict) -> int:
+    return int(t.get("type") or 0)
+
+
+def manual(data: dict) -> list[str]:
+    return [t["tag"] for t in data.get("tags") or [] if ttype(t) == 0]
+
+
+def automatic(data: dict) -> list[str]:
+    return [t["tag"] for t in data.get("tags") or [] if ttype(t) == 1]
+
+
+def norm(field: str, value: Any) -> Any:
+    if field == "tags":
+        return sorted((t["tag"], ttype(t)) for t in value or [])
+    if field == "collections":
+        return sorted(value or [])
+    if field == "deleted":
+        return bool(value)
+    if value is None:
+        return ""
+    return value
+
+
+def writable(field: str, value: Any) -> Any:
+    if value is not None:
+        return value
+    return {"tags": [], "collections": [], "deleted": False, "creators": []}.get(field, "")
+
+
+def regular(item: dict) -> bool:
+    return item["data"].get("itemType") not in NON_REGULAR
+
+
+def short_creators(data: dict, n: int = 3) -> str:
+    names = [c.get("lastName") or c.get("name") or "" for c in data.get("creators") or []]
+    names = [x for x in names if x]
+    text = ", ".join(names[:n])
+    return text + (" et al." if len(names) > n else "")
+
+
+def truncate(text: str, n: int) -> str:
+    text = text or ""
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def label(data: dict) -> str:
+    who = short_creators(data, 1) or "?"
+    return f"{who} {year_of(data) or 'n.d.'}: {truncate(data.get('title') or '', 80)}"
+
+
+def html_to_text(text: str) -> str:
+    text = re.sub(r"<(br|/p|/div|/h\d|/li)\s*/?>", "\n", text or "", flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\n{3,}", "\n\n", html.unescape(text)).strip()
+
+
+# ---------------------------------------------------------------- library
+
+class Library:
+    def __init__(self, settings: Settings, client: LocalZotero | None = None) -> None:
+        self.s = settings
+        self.z = client or LocalZotero(settings.api_url, settings.state_dir, settings.auth_timeout)
+        self.vocab = VocabularyStore(settings.vocab_path)
+        self._journal: Journal | None = None
+
+    async def journal(self) -> Journal:
+        await self.z._ensure()
+        sid = self.z.server_id or "unknown"
+        if self._journal is None or self._journal.dir.name != sid:
+            self._journal = Journal(self.s.state_dir, sid)
+        return self._journal
+
+    async def regular_items(self, collection: str | None = None, query: str | None = None,
+                            fulltext: bool = False) -> list[dict]:
+        items = await self.z.top_items(collection, query, fulltext)
+        return [i for i in items if regular(i) and not i["data"].get("deleted")]
+
+    def summarize(self, item: dict, detail: bool = False) -> dict:
+        d = item["data"]
+        out: dict[str, Any] = {
+            "key": d["key"],
+            "citekey": current_key(d),
+            "type": d.get("itemType"),
+            "year": year_of(d),
+            "authors": short_creators(d),
+            "title": d.get("title", ""),
+            "tags": manual(d),
+        }
+        if detail:
+            out["venue"] = (
+                d.get("publicationTitle") or d.get("bookTitle") or d.get("publisher") or ""
+            )
+            out["doi"] = d.get("DOI", "")
+            out["abstract"] = truncate(d.get("abstractNote") or "", 1500)
+            out["automatic_tags"] = automatic(d)
+        return out
+
+    # ------------------------------------------------------------ reads
+
+    async def status(self) -> dict:
+        out: dict[str, Any] = {"api_url": self.s.api_url}
+        try:
+            await self.z.connect()
+            out.update(
+                zotero="reachable",
+                server_id=self.z.server_id,
+                api_version=self.z.api_version,
+                write_key_remembered=self.z.has_remembered_key,
+            )
+        except ZoteroError as exc:
+            out.update(zotero="unreachable", error=str(exc))
+        vocab = self.vocab.get()
+        out["vocabulary"] = (
+            {"path": str(vocab.path), "tags": len(vocab.entries), "facets": vocab.facets,
+             "required_facets": vocab.required_facets, "single_facets": vocab.single_facets,
+             "problems": vocab.problems}
+            if vocab else {"path": str(self.s.vocab_path), "loaded": False}
+        )
+        out["review_marker"] = self.s.marker or None
+        out["state_dir"] = str(self.s.state_dir)
+        return out
+
+    async def overview(self) -> dict:
+        items = await self.regular_items()
+        vocab = self.vocab.get()
+        types = Counter(i["data"]["itemType"] for i in items)
+        facets = vocab.facets if vocab else sorted(
+            {f for i in items for t in manual(i["data"]) if (f := facet_of(t))}
+        )
+        missing = {
+            f: sum(1 for i in items if not any(facet_of(t) == f for t in manual(i["data"])))
+            for f in facets
+        }
+        outside: Counter[str] = Counter()
+        if vocab:
+            for i in items:
+                outside.update(t for t in manual(i["data"]) if not vocab.allows(t))
+        marker = self.s.marker
+        return {
+            "items": len(items),
+            "by_type": dict(types.most_common()),
+            "without_manual_tags": sum(1 for i in items if not manual(i["data"])),
+            "missing_facet": missing,
+            "required_facets": vocab.required_facets if vocab else [],
+            "items_with_automatic_tags": sum(1 for i in items if automatic(i["data"])),
+            "manual_tags_outside_vocabulary": {"distinct": len(outside),
+                                               "top": dict(outside.most_common(25))},
+            "without_citekey": sum(1 for i in items if not current_key(i["data"])),
+            "awaiting_review": (sum(1 for i in items if marker in manual(i["data"]))
+                                if marker else None),
+            "vocabulary_loaded": vocab is not None,
+        }
+
+    async def find(self, query: str | None = None, fulltext: bool = False,
+                   collection: str | None = None, tag: str | None = None,
+                   item_type: str | None = None, missing_facet: str | None = None,
+                   untagged: bool = False, outside_vocabulary: bool = False,
+                   detail: bool = False, limit: int = 50, offset: int = 0) -> dict:
+        items = await self.regular_items(collection, query, fulltext)
+        vocab = self.vocab.get() if outside_vocabulary else None
+        if outside_vocabulary and vocab is None:
+            raise ZoteroError("outside_vocabulary needs the vocabulary file.")
+
+        def keep(i: dict) -> bool:
+            d = i["data"]
+            tags = manual(d)
+            if tag and tag not in tags and tag not in automatic(d):
+                return False
+            if item_type and d.get("itemType") != item_type:
+                return False
+            if untagged and tags:
+                return False
+            if missing_facet and any(facet_of(t) == missing_facet for t in tags):
+                return False
+            if vocab and all(vocab.allows(t) for t in tags):
+                return False
+            return True
+
+        hits = sorted((i for i in items if keep(i)),
+                      key=lambda i: i["data"].get("dateAdded", ""), reverse=True)
+        limit = max(1, min(limit, 200))
+        page = hits[offset : offset + limit]
+        return {
+            "total": len(hits),
+            "offset": offset,
+            "returned": len(page),
+            "items": [self.summarize(i, detail) for i in page],
+        }
+
+    async def get_item(self, key: str) -> dict:
+        item = await self.z.item(key)
+        d = item["data"]
+        out = self.summarize(item, detail=True)
+        out["abstract"] = d.get("abstractNote", "")
+        out["all_tags"] = [{"tag": t["tag"], "automatic": ttype(t) == 1} for t in d.get("tags") or []]
+        out["fields"] = {
+            k: v for k, v in d.items()
+            if k not in {"key", "version", "tags", "relations", "abstractNote"} and v not in ("", [], {}, None)
+        }
+        names = {c["key"]: c["data"]["name"] for c in await self.z.collections()}
+        out["collections"] = [{"key": c, "name": names.get(c, "?")} for c in d.get("collections") or []]
+        out["zotero_link"] = f"zotero://select/library/items/{key}"
+        notes, files = [], []
+        if regular(item):
+            for c in await self.z.children(key):
+                cd = c["data"]
+                if cd.get("itemType") == "note":
+                    notes.append({"key": cd["key"], "text": truncate(html_to_text(cd.get("note", "")), 3000)})
+                elif cd.get("itemType") == "attachment":
+                    files.append({"key": cd["key"], "title": cd.get("title"),
+                                  "contentType": cd.get("contentType"), "linkMode": cd.get("linkMode"),
+                                  "filename": cd.get("filename") or cd.get("path")})
+        out["notes"], out["attachments"] = notes, files
+        return out
+
+    async def list_tags(self, facet: str | None = None, outside_vocabulary: bool = False,
+                        include_automatic: bool = False, min_items: int = 1) -> dict:
+        items = await self.regular_items()
+        vocab = self.vocab.get()
+        counts: Counter[tuple[str, int]] = Counter()
+        for i in items:
+            for t in i["data"].get("tags") or []:
+                counts[(t["tag"], ttype(t))] += 1
+        rows = []
+        for (tag, kind), n in counts.most_common():
+            if kind == 1 and not include_automatic:
+                continue
+            if facet and facet_of(tag) != facet:
+                continue
+            in_vocab = vocab.allows(tag) if vocab else None
+            if outside_vocabulary and in_vocab:
+                continue
+            if n < min_items:
+                continue
+            rows.append({"tag": tag, "items": n, "automatic": kind == 1, "in_vocabulary": in_vocab})
+        return {"distinct": len(rows), "tags": rows}
+
+    def get_vocabulary(self) -> dict:
+        return self.vocab.require().as_dict()
+
+    async def list_collections(self) -> list[dict]:
+        cols = await self.z.collections()
+        names = {c["key"]: c["data"]["name"] for c in cols}
+        return sorted(
+            (
+                {"key": c["key"], "name": c["data"]["name"],
+                 "parent": names.get(c["data"].get("parentCollection") or "", None),
+                 "items": (c.get("meta") or {}).get("numItems")}
+                for c in cols
+            ),
+            key=lambda r: ((r["parent"] or ""), r["name"].lower()),
+        )
+
+    async def history(self, limit: int = 10) -> list[dict]:
+        j = await self.journal()
+        rows = []
+        for e in reversed(j.entries()[-limit:]):
+            rows.append({k: e.get(k) for k in ("id", "op", "summary", "time", "undoes", "undone_by")}
+                        | {"items": len(e.get("changes") or []),
+                           "items_undone": len(e.get("undone_keys") or []),
+                           "fully_undone": Journal.fully_undone(e)})
+        return rows
+
+    # ------------------------------------------------------------ write engine
+
+    async def _plan(self, edits: dict[str, Editor]) -> tuple[list[dict], dict[str, str]]:
+        found = {i["key"]: i for i in await self.z.items_by_keys(list(edits))}
+        plan, skipped = [], {}
+        for key, fn in edits.items():
+            item = found.get(key)
+            if item is None:
+                skipped[key] = "not found"
+                continue
+            data = item["data"]
+            try:
+                new = fn(data)
+            except Skip as exc:
+                skipped[key] = str(exc)
+                continue
+            if not new:
+                continue
+            changed = {f: v for f, v in new.items() if norm(f, v) != norm(f, data.get(f))}
+            if changed:
+                plan.append({"key": key, "data": data,
+                             "before": {f: data.get(f) for f in changed}, "after": changed})
+        return plan, skipped
+
+    @staticmethod
+    def _describe(p: dict) -> dict:
+        d: dict[str, Any] = {"key": p["key"], "item": label(p["data"])}
+        for f, new in p["after"].items():
+            old = p["before"].get(f)
+            if f == "tags":
+                o = {t["tag"] for t in old or []}
+                n = {t["tag"] for t in new or []}
+                d["added"] = sorted(n - o)
+                d["removed"] = sorted(o - n)
+                d["tags_after"] = [t["tag"] for t in new if ttype(t) == 0]
+            elif f == "collections":
+                d["collections"] = {"before": old or [], "after": new}
+            else:
+                d[f] = {"before": truncate(str(writable(f, old)), 300), "after": truncate(str(new), 300)}
+        return d
+
+    async def _run(self, op: str, summary: str, edits: dict[str, Editor], dry_run: bool,
+                   undoes: str | None = None) -> dict:
+        plan, skipped = await self._plan(edits)
+        if dry_run:
+            return {
+                "dry_run": True,
+                "operation": op,
+                "would_change": len(plan),
+                "changes": [self._describe(p) for p in plan[:PREVIEW_LIMIT]],
+                "not_shown": max(0, len(plan) - PREVIEW_LIMIT),
+                "skipped": skipped,
+                "next": "Nothing was written. Show this preview to the user and call again "
+                        "with dry_run=false only after they approve.",
+            }
+        if not plan:
+            return {"applied": 0, "skipped": skipped, "journal_id": None}
+
+        def objects(ps: list[dict]) -> list[dict]:
+            return [{"key": p["key"], "version": p["data"]["version"],
+                     **{f: writable(f, v) for f, v in p["after"].items()}} for p in ps]
+
+        res = await self.z.update_items(objects(plan))
+        done = {p["key"]: p for p in plan if p["key"] in res.succeeded}
+        failed = dict(res.failed)
+        error, not_sent = res.error, list(res.not_sent)
+        conflicts = [k for k, (code, _) in failed.items() if code == 412 and k in edits]
+        if conflicts and not error:
+            # Someone edited these items meanwhile: re-read them and apply the change again.
+            plan2, skipped2 = await self._plan({k: edits[k] for k in conflicts})
+            for k in conflicts:
+                failed.pop(k, None)
+            skipped.update(skipped2)
+            if plan2:
+                res2 = await self.z.update_items(objects(plan2))
+                done.update({p["key"]: p for p in plan2 if p["key"] in res2.succeeded})
+                failed.update(res2.failed)
+                error, not_sent = res2.error, list(res2.not_sent)
+        journal_id = None
+        if done:
+            j = await self.journal()
+            journal_id = j.record(
+                op, summary,
+                [{"key": k, "item": label(p["data"]), "before": p["before"], "after": p["after"]}
+                 for k, p in done.items()],
+                undoes=undoes,
+            )
+        out = {
+            "applied": len(done),
+            "unchanged": len(res.unchanged),
+            "skipped": skipped,
+            "failed": {k: f"HTTP {c}: {m}" for k, (c, m) in failed.items()},
+            "journal_id": journal_id,
+        }
+        if error:
+            out["error"] = error
+            out["not_sent"] = not_sent
+            out["status"] = (f"Stopped after {len(done)} items were saved (journaled, undoable). "
+                             f"{len(not_sent)} items were not sent. Fix the error, then run the "
+                             "same call again: saved items will show as unchanged.")
+        if self.z.last_auth_note:
+            out["note"] = self.z.last_auth_note
+        return out
+
+    # ------------------------------------------------------------ tags
+
+    def _tag_editor(self, add: list[str], remove: list[str], single: list[str],
+                    mark: bool) -> Editor:
+        marker = self.s.marker
+
+        def fn(data: dict) -> dict:
+            tags = [dict(t) for t in data.get("tags") or []]
+            before_manual = set(manual(data))
+            new_single = {facet_of(t) for t in add if facet_of(t) in single}
+            kept = [
+                t for t in tags
+                if t["tag"] not in remove
+                and not (ttype(t) == 0 and facet_of(t["tag"]) in new_single and t["tag"] not in add)
+            ]
+            names = {t["tag"] for t in kept if ttype(t) == 0}
+            new_adds = [t for t in add if t not in before_manual]
+            extra = [marker] if (mark and marker and new_adds) else []
+            for t in [*add, *extra]:
+                if t in names:
+                    continue
+                auto = next((x for x in kept if x["tag"] == t and ttype(x) == 1), None)
+                if auto is not None:
+                    auto.pop("type", None)  # same name as an automatic tag: make it manual
+                else:
+                    kept.append({"tag": t})
+                names.add(t)
+            return {"tags": kept}
+
+        return fn
+
+    def _check_tags(self, tags: list[str]) -> list[str]:
+        vocab = self.vocab.require()
+        aliases = vocab.alias_map()
+        errors = []
+        for t in tags:
+            if vocab.allows(t):
+                continue
+            hint = aliases.get(t.lower()) or aliases.get(t.split("/", 1)[-1].lower())
+            errors.append(f"'{t}' is not in the vocabulary" + (f" (alias of {hint})" if hint else ""))
+        return errors
+
+    async def tag_items(self, changes: list[dict], dry_run: bool = True) -> dict:
+        vocab = self.vocab.require()
+        errors: list[str] = []
+        edits: dict[str, Editor] = {}
+        for ch in changes:
+            key = ch["key"]
+            add = [t.strip() for t in ch.get("add") or [] if t.strip()]
+            remove = [t.strip() for t in ch.get("remove") or [] if t.strip()]
+            errors += [f"{key}: {e}" for e in self._check_tags(add)]
+            per_facet = Counter(facet_of(t) for t in add if facet_of(t) in vocab.single_facets)
+            errors += [f"{key}: only one '{f}/' tag is allowed" for f, n in per_facet.items() if n > 1]
+            if key in edits:
+                errors.append(f"{key}: listed twice")
+            edits[key] = self._tag_editor(add, remove, vocab.single_facets, mark=True)
+        if errors:
+            raise ZoteroError(
+                "Nothing was written. Fix these first (add missing tags to the vocabulary file "
+                "only with the user's approval):\n" + "\n".join(errors)
+            )
+        return await self._run("tag_items", f"tag {len(edits)} items", edits, dry_run)
+
+    async def rename_tags(self, mapping: dict[str, str], dry_run: bool = True) -> dict:
+        errors = self._check_tags(sorted(set(mapping.values())))
+        if errors:
+            raise ZoteroError("Nothing was written. Targets must be in the vocabulary:\n" + "\n".join(errors))
+        sources = set(mapping)
+        edits: dict[str, Editor] = {}
+        for i in await self.regular_items():
+            present = {t["tag"] for t in i["data"].get("tags") or []} & sources
+            if not present:
+                continue
+            targets = sorted({mapping[s] for s in present})
+            edits[i["key"]] = self._tag_editor(targets, sorted(present), [], mark=False)
+        summary = "; ".join(f"{s} -> {t}" for s, t in sorted(mapping.items()))
+        return await self._run("rename_tags", truncate(summary, 500), edits, dry_run)
+
+    async def remove_tags(self, tags: list[str], dry_run: bool = True) -> dict:
+        drop = set(tags)
+        edits = {
+            i["key"]: self._tag_editor([], sorted(drop), [], mark=False)
+            for i in await self.regular_items()
+            if {t["tag"] for t in i["data"].get("tags") or []} & drop
+        }
+        return await self._run("remove_tags", truncate(", ".join(sorted(drop)), 500), edits, dry_run)
+
+    async def remove_automatic_tags(self, keys: list[str] | None = None, dry_run: bool = True) -> dict:
+        if keys:
+            targets = keys
+        else:
+            targets = [i["key"] for i in await self.regular_items() if automatic(i["data"])]
+
+        def fn(data: dict) -> dict:
+            return {"tags": [t for t in data.get("tags") or [] if ttype(t) == 0]}
+
+        return await self._run("remove_automatic_tags", f"{len(targets)} items",
+                               {k: fn for k in targets}, dry_run)
+
+    # ------------------------------------------------------------ citekeys and fields
+
+    async def set_citekeys(self, keys: list[str] | None = None, force: bool = False,
+                           dry_run: bool = True) -> dict:
+        items = await self.regular_items()
+        by_key = {i["key"]: i for i in items}
+        holders = Counter(k for i in items if (k := current_key(i["data"])))
+        taken = set(holders)
+        if keys:
+            unknown = [k for k in keys if k not in by_key]
+            if unknown:
+                raise ZoteroError(f"Unknown or non-regular items: {', '.join(unknown)}")
+            targets = [by_key[k] for k in keys]
+        else:
+            targets = [i for i in items if not current_key(i["data"])]
+        targets.sort(key=lambda i: i["data"].get("dateAdded", ""))
+        edits: dict[str, Editor] = {}
+        pinned = 0
+        for i in targets:
+            old = current_key(i["data"])
+            if old and not force:
+                pinned += 1
+                continue
+            if old:
+                holders[old] -= 1
+                if holders[old] <= 0:
+                    taken.discard(old)  # free the key only if no other item holds it
+            new = unique_key(base_key(i["data"]), taken)
+            taken.add(new)
+            edits[i["key"]] = lambda data, new=new: with_key(data, new)
+        out = await self._run("set_citekeys", f"{len(edits)} items", edits, dry_run)
+        out["kept_existing_keys"] = pinned
+        return out
+
+    async def update_fields(self, key: str, fields: dict[str, Any], dry_run: bool = True) -> dict:
+        bad = sorted(set(fields) & PROTECTED_FIELDS)
+        if bad:
+            raise ZoteroError(
+                f"Use the dedicated tools for: {', '.join(bad)} (tags, collections, trash, citekeys)."
+            )
+        item = await self.z.item(key)
+        unknown = sorted(f for f in fields if f not in item["data"])
+        if unknown:
+            valid = sorted(f for f in item["data"] if f not in PROTECTED_FIELDS)
+            raise ZoteroError(
+                f"Fields not valid for this {item['data'].get('itemType')}: {', '.join(unknown)}. "
+                f"Valid: {', '.join(valid)}"
+            )
+        return await self._run("update_fields", f"{key}: {', '.join(fields)}",
+                               {key: lambda data: dict(fields)}, dry_run)
+
+    # ------------------------------------------------------------ collections, notes, trash
+
+    async def file_items(self, keys: list[str], collection_key: str, remove: bool = False,
+                         dry_run: bool = True) -> dict:
+        names = {c["key"]: c["data"]["name"] for c in await self.z.collections()}
+        if collection_key not in names:
+            raise ZoteroError(f"No collection {collection_key}. Use list_collections.")
+
+        def fn(data: dict) -> dict:
+            cols = list(data.get("collections") or [])
+            if remove:
+                cols = [c for c in cols if c != collection_key]
+            elif collection_key not in cols:
+                cols.append(collection_key)
+            return {"collections": cols}
+
+        verb = "remove from" if remove else "add to"
+        return await self._run("file_items", f"{verb} {names[collection_key]}: {len(keys)} items",
+                               {k: fn for k in keys}, dry_run)
+
+    async def create_collection(self, name: str, parent_key: str | None = None,
+                                dry_run: bool = True) -> dict:
+        if parent_key:
+            names = {c["key"]: c["data"]["name"] for c in await self.z.collections()}
+            if parent_key not in names:
+                raise ZoteroError(f"No parent collection {parent_key}.")
+        if dry_run:
+            return {"dry_run": True, "would_create": {"name": name, "parent": parent_key},
+                    "next": "Nothing was written. Call again with dry_run=false after approval."}
+        new_key = await self.z.create_collection(name, parent_key)
+        return {"created": new_key, "name": name,
+                "note": "Collections are not recorded in the journal. Remove it in Zotero if unwanted."}
+
+    async def create_note(self, parent_key: str, markdown_text: str, dry_run: bool = True) -> dict:
+        parent = await self.z.item(parent_key)
+        if not regular(parent):
+            raise ZoteroError("Notes can only be attached to regular items.")
+        body = md.markdown(markdown_text, extensions=["extra", "sane_lists"])
+        if dry_run:
+            return {"dry_run": True, "parent": label(parent["data"]),
+                    "note_preview": truncate(markdown_text, 1500),
+                    "next": "Nothing was written. Call again with dry_run=false after approval."}
+        tags = [{"tag": self.s.marker}] if self.s.marker else []
+        res = await self.z.create_items([{
+            "itemType": "note", "parentItem": parent_key, "note": f"<div>{body}</div>",
+            "tags": tags, "collections": [], "relations": {},
+        }])
+        if not res.created:
+            raise ZoteroError(f"Creating the note failed: {res.failed}")
+        note_key = res.created[0]
+        j = await self.journal()
+        jid = j.record("create_note", f"note on {parent_key}",
+                       [{"key": note_key, "item": f"note on {label(parent['data'])}",
+                         "before": {"deleted": True}, "after": {"deleted": False}}])
+        return {"created": note_key, "parent": parent_key, "journal_id": jid}
+
+    async def trash_items(self, keys: list[str], dry_run: bool = True) -> dict:
+        def fn(data: dict) -> dict:
+            if data.get("deleted"):
+                raise Skip("already in the trash")
+            return {"deleted": True}
+
+        return await self._run("trash_items", f"trash {len(keys)} items", {k: fn for k in keys}, dry_run)
+
+    # ------------------------------------------------------------ undo
+
+    async def undo(self, journal_id: str | None = None, dry_run: bool = True) -> dict:
+        j = await self.journal()
+        entry = j.load(journal_id) if journal_id else j.last_undoable()
+        if entry is None:
+            raise ZoteroError("Nothing to undo.")
+        done_keys = set(entry.get("undone_keys") or [])
+        pending = [ch for ch in entry["changes"] if ch["key"] not in done_keys]
+        if not pending:
+            raise ZoteroError(f"{entry['id']} was already undone completely.")
+        edits: dict[str, Editor] = {}
+        for ch in pending:
+            def fn(data: dict, after=ch["after"], before=ch["before"]) -> dict:
+                for f, v in after.items():
+                    if norm(f, data.get(f)) != norm(f, v):
+                        raise Skip(f"'{f}' was changed after this operation; left as is")
+                return dict(before)
+
+            edits[ch["key"]] = fn
+        out = await self._run("undo", f"undo {entry['id']} ({entry['op']})", edits, dry_run,
+                              undoes=entry["id"])
+        out["undoing"] = {"id": entry["id"], "op": entry["op"], "summary": entry["summary"]}
+        return out
