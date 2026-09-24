@@ -1,69 +1,64 @@
 # zotero-local-mcp
 
-MCP server for a local Zotero 10 library. It lets an agent (OpenCode, Claude Code) search the library, tag items with a controlled vocabulary, set citekeys, edit fields, file items in collections, add notes and move items to the trash.
+Two MCP servers for a local Zotero 10 library, plus a weekly alert script:
 
-It talks only to Zotero's local API on `127.0.0.1:23119`. It needs no zotero.org API key, and it does not touch the network. Changes appear in Zotero at once and sync as normal edits, so WebDAV file sync is not affected.
+- `zotero-local-mcp` (librarian): search and edit the library, faceted tagging with a controlled vocabulary, citekeys, imports by DOI/PMID/ISBN, metadata audit and repair, duplicates, retraction check, open-access PDFs, notes, collections, undo.
+- `zotero-scholar-mcp` (researcher): PubMed and OpenAlex search with "already in library" flags, citation graph, manuscript citation check, CSL JSON bibliographies for Quarto, import queue. It cannot write to Zotero.
+- `zotero-alerts`: runs saved searches from an Obsidian note and writes new works to an Inbox note. No AI model.
+
+The library is reached only through Zotero's local API on `127.0.0.1:23119`: no zotero.org key, changes appear in Zotero at once and sync as normal edits (WebDAV file sync is not affected). Outside metadata comes from Crossref, PubMed (NCBI E-utilities), OpenAlex, Unpaywall and Open Library.
 
 ## Safety
 
 - Every write tool defaults to `dry_run=true` and returns a preview.
-- Added tags must be in the vocabulary file. Tags that start with `_` are system tags.
-- Each item write sends the item version. If you edit the item in Zotero at the same time, the server reads it again and re-applies its change; your edit is kept.
-- Every applied write goes to a journal (`~/.local/share/zotero-local-mcp/journal/`). `undo` reverts it and skips items edited since.
-- The server never sends DELETE requests. Tags are removed from items; items go to the trash.
-- Items that the agent tags get the marker tag `_agent`, so you can review them in Zotero.
+- Added tags must be in the vocabulary file. Tags that start with `_` are system tags. Imports never add keywords or MeSH headings as tags.
+- Each item write sends the item version; concurrent edits in Zotero are kept.
+- Every applied write goes to a journal (`~/.local/share/zotero-local-mcp/journal/`). `undo` reverts it, skipping items edited since. Imports and attached PDFs are undone by moving them to the trash.
+- No DELETE requests. Items go to the trash.
+- The researcher's library client refuses writes. Works it proposes go to an import queue note that a person ticks; the librarian imports the ticked lines. Queue labels are sanitised so they cannot create or tick lines.
+- Duplicate detection by title needs the same year and first author, and no conflicting DOI/PMID.
 
 ## Tools
 
-| Read | Write (dry_run by default) |
-|---|---|
-| status | tag_items |
-| library_overview | rename_tags |
-| find_items | remove_tags |
-| get_item, get_fulltext | remove_automatic_tags |
-| list_tags | set_citekeys |
-| get_vocabulary | update_fields |
-| list_collections | file_items, create_collection |
-| history | create_note, trash_items, undo |
+| Librarian: read | Librarian: write (dry run by default) | Researcher |
+|---|---|---|
+| status, library_overview | tag_items, rename_tags, remove_tags | search_pubmed, search_openalex |
+| find_items, get_item, get_fulltext | remove_automatic_tags, set_citekeys | get_work, citation_graph |
+| list_tags, get_vocabulary | update_fields, file_items, create_collection | library_lookup |
+| list_collections, history | create_note, trash_items, undo | check_manuscript |
+| audit_metadata, find_duplicates | import_identifiers, import_queue | export_bibliography |
+| check_retractions, missing_pdfs | repair_metadata, attach_oa_pdfs | queue_imports |
 
 ## Requirements
 
-- Zotero 10 or later, running.
+- Zotero 10 or later, running, with Settings > Advanced > "Allow other applications on this computer to communicate with Zotero".
 - uv (`brew install uv`).
-- Zotero > Settings > Advanced: select "Allow other applications on this computer to communicate with Zotero".
 
 ## Install
 
-1. Quit Zotero. Copy the folder `~/Zotero` to a backup location. Start Zotero again.
-2. Open a terminal. Run:
-   ```sh
-   cd ~/Projects/zotero-local-mcp
-   uv sync
-   uv run pytest -q
-   ```
-   All tests must pass.
-3. Check the connection:
-   ```sh
-   ZOTERO_VOCAB="$HOME/Notes/Systems/Zotero tags.md" uv run zotero-local-mcp --check
-   ```
-   The result must show `"zotero": "reachable"` and the vocabulary with no problems.
-4. Add the server to OpenCode. See `examples/opencode-global.jsonc`.
-5. Add the OpenRouter key: `opencode auth login`, then select OpenRouter.
-6. In OpenRouter > Settings > Privacy, turn on zero data retention. Item titles and abstracts go to the model provider.
+1. Quit Zotero. Copy `~/Zotero` to a backup location. Start Zotero.
+2. Copy `examples/zotero.env` to `~/.config/opencode/zotero.env`. Fill in `ZOTERO_CONTACT_EMAIL` (required for Unpaywall).
+3. Run `uv sync && uv run pytest -q`. All tests must pass.
+4. Run `ZOTERO_MCP_ENV=~/.config/opencode/zotero.env uv run zotero-local-mcp --check`. The result must show `"zotero": "reachable"`.
+5. Add the servers and the two agents to OpenCode: see `examples/opencode-global.jsonc`.
+6. Optional: weekly alerts with launchd, see `examples/launchd/`.
 
 ## Configuration
 
-| Variable | Default | Use |
-|---|---|---|
-| `ZOTERO_VOCAB` | none | Path to the vocabulary Markdown file. Tag writes are blocked without it. |
-| `ZOTERO_API_URL` | `http://127.0.0.1:23119/api` | Local API address. |
-| `ZOTERO_AGENT_MARKER` | `_agent` | Review marker tag. Empty string turns it off. |
-| `ZOTERO_MCP_STATE` | `~/.local/share/zotero-local-mcp` | Journal and saved write key. |
-| `ZOTERO_AUTH_TIMEOUT` | `300` | Seconds to wait for the Zotero authorization dialog. |
+Settings come from environment variables or from the file named by `ZOTERO_MCP_ENV` (default `~/.config/zotero-local-mcp/env`), one `KEY=VALUE` per line.
+
+| Variable | Use |
+|---|---|
+| `ZOTERO_VOCAB` | Vocabulary Markdown file. Tag writes are blocked without it. |
+| `ZOTERO_VAULT` | Obsidian vault: import queue (`Inbox/Zotero import queue.md`) and alert notes. |
+| `ZOTERO_ALERTS` | Saved searches (default `<vault>/Systems/Literature alerts.md`). |
+| `ZOTERO_CONTACT_EMAIL` | Required by Unpaywall; sent to Crossref, OpenAlex and NCBI for polite use. |
+| `NCBI_API_KEY`, `OPENALEX_API_KEY` | Optional higher rate limits. |
+| `ZOTERO_API_URL` | Default `http://127.0.0.1:23119/api`. |
+| `ZOTERO_AGENT_MARKER` | Review marker tag, default `_agent`. |
+| `ZOTERO_MCP_STATE` | Journal, write key, caches. Default `~/.local/share/zotero-local-mcp`. |
 
 ## Vocabulary file
-
-A Markdown file. The frontmatter sets the required facets and the facets that allow one tag only. Each tag is the first backticked token of a bullet:
 
 ```markdown
 ---
@@ -74,22 +69,30 @@ single_facets: status
 - `topic/spirometry` Spirometry. aliases: Spirometry, FEV1
 ```
 
-The file is read again when it changes, so edits in Obsidian apply at once.
+## Alerts file
+
+```markdown
+---
+days: 7
+max_per_query: 20
+---
+## pubmed
+- `FeNO[tiab] AND asthma[tiab]` FeNO in asthma
+## openalex
+- `health data literacy` Health data literacy
+```
 
 ## Write authorization
 
-The first write opens a Zotero dialog. Choose "Always Allow". The key is saved in the state folder (permissions 600). With "Allow", the key is single-use and each batch of 50 items shows the dialog again (Zotero allows 5 dialogs per minute). To revoke all keys: Zotero > Settings > Advanced > Clear Write Authorizations.
+The first write opens a Zotero dialog. Choose "Always Allow"; the key is saved in the state folder (permissions 600). With "Allow", each batch shows the dialog again. To revoke: Zotero > Settings > Advanced > Clear Write Authorizations.
 
 ## Citekeys
 
-`set_citekeys` writes keys like `jacinto2026`, `jacinto2026a`. Older items (by date added) get the plain key. The key goes to the native citationKey field if the item has one, otherwise to a `Citation Key:` line in Extra. Better BibTeX reads both. Existing keys are kept unless `force=true`.
+`jacinto2026`, `jacinto2026a`. Stored in the native citationKey field when the item has one, otherwise as `Citation Key:` in Extra. Better BibTeX reads both.
 
 ## Not yet checked against a real Zotero 10
 
-The tests use a simulated local API. Check these on first use with a test item:
-
-- `trash_items` sets `deleted: true`, and `undo` sets it back to false.
-- Whether items expose the native `citationKey` field.
+The tests use simulated services. Check on first use: trash and undo, the citekey location, one import, one PDF attachment (local file upload).
 
 ## Development
 
@@ -98,4 +101,4 @@ uv sync
 uv run pytest -q
 ```
 
-`tests/fake_zotero.py` imitates the Zotero 10 local API (Server ID, authorization, versions, 50-object batches).
+`tests/fake_zotero.py` imitates the Zotero 10 local API; `tests/fake_external.py` gives canned Crossref, PubMed, OpenAlex, Unpaywall and Open Library responses.

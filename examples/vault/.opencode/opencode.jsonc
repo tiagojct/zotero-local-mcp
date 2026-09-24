@@ -1,13 +1,8 @@
 // Notes/.opencode/opencode.jsonc — applies when OpenCode starts inside the vault.
 {
   "$schema": "https://opencode.ai/config.json",
-  // OpenCode does not read .claude/CLAUDE.md on its own, so load the vault rules explicitly.
-  "instructions": [
-    "~/Notes/.claude/CLAUDE.md",
-    "~/Notes/Systems/Zotero agent.md"
-  ],
-  "permission": {
-    "edit": "ask",
-    "bash": "ask"
-  }
+  // OpenCode does not read .claude/CLAUDE.md on its own. The Zotero rules come from the global config.
+  "instructions": ["~/Notes/.claude/CLAUDE.md"],
+  // Start in the researcher; press Tab to switch to the librarian.
+  "default_agent": "researcher"
 }

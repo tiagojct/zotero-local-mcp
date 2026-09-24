@@ -17,6 +17,24 @@ import httpx
 
 ALPHABET = "23456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
 
+_COMMON = {"title": "", "creators": [{"creatorType": "author", "firstName": "", "lastName": ""}],
+           "abstractNote": "", "date": "", "language": "", "shortTitle": "", "url": "",
+           "accessDate": "", "extra": "", "tags": [], "collections": [], "relations": {}}
+TEMPLATES = {
+    "journalArticle": {"itemType": "journalArticle", **_COMMON, "publicationTitle": "", "volume": "",
+                       "issue": "", "pages": "", "series": "", "journalAbbreviation": "", "DOI": "",
+                       "ISSN": ""},
+    "book": {"itemType": "book", **_COMMON, "series": "", "edition": "", "place": "", "publisher": "",
+             "numPages": "", "ISBN": ""},
+    "bookSection": {"itemType": "bookSection", **_COMMON, "bookTitle": "", "place": "", "publisher": "",
+                    "pages": "", "ISBN": ""},
+    "preprint": {"itemType": "preprint", **_COMMON, "repository": "", "archiveID": "", "DOI": ""},
+    "document": {"itemType": "document", **_COMMON, "publisher": ""},
+    "attachment": {"itemType": "attachment", "linkMode": "imported_url", "title": "", "accessDate": "",
+                   "url": "", "note": "", "contentType": "", "charset": "", "filename": "", "md5": None,
+                   "mtime": None, "tags": [], "relations": {}},
+}
+
 
 def new_key() -> str:
     return "".join(secrets.choice(ALPHABET) for _ in range(8))
@@ -35,14 +53,20 @@ class FakeZotero:
         self.write_requests = 0
         self.seen_headers: list[dict] = []
         self.fulltext: dict[str, dict] = {}
+        self.uploads: dict[str, dict] = {}
+        self.files: dict[str, bytes] = {}
 
     # ------------------------------------------------------------ fixtures
 
     def add_item(self, **data) -> str:
         key = data.pop("key", None) or new_key()
-        base = {"key": key, "version": self.lib_version, "itemType": "journalArticle",
-                "title": "", "creators": [], "date": "", "extra": "", "abstractNote": "",
-                "tags": [], "collections": [], "relations": {}, "dateAdded": "2020-01-01T00:00:00Z"}
+        itype = data.get("itemType", "journalArticle")
+        base = json.loads(json.dumps(TEMPLATES.get(itype, {})))  # real items carry every field of their type
+        base.update({"key": key, "version": self.lib_version, "itemType": itype, "title": "",
+                     "creators": [], "date": "", "extra": "", "abstractNote": "", "tags": [],
+                     "collections": [], "relations": {}, "dateAdded": "2020-01-01T00:00:00Z"})
+        if itype in ("note", "attachment"):
+            base.pop("abstractNote", None)
         base.update(data)
         self.items[key] = base
         return key
@@ -87,6 +111,17 @@ class FakeZotero:
             return resp(412, {"error": "server id mismatch"})
         if path in ("/api", "/api/"):
             return resp(200, {})
+        if path == "/api/items/new":
+            t = q.get("itemType")
+            if t not in TEMPLATES:
+                return resp(400, {"error": "Invalid item type"})
+            return resp(200, json.loads(json.dumps(TEMPLATES[t])))
+        if path.startswith("/api/local/uploads/") and method == "POST":
+            up = path.rsplit("/", 1)[-1]
+            if up not in self.uploads:
+                return resp(400, {"error": "bad upload key"})
+            self.uploads[up]["bytes"] = body
+            return resp(201, None)
         if path == "/api/local/authorize" and method == "POST":
             if not sid:
                 return resp(428, {"error": "Zotero-Server-ID required"})
@@ -140,6 +175,10 @@ class FakeZotero:
         # POST writes
         if not sid:
             return resp(428, {"error": "Zotero-Server-ID required"})
+        if rest.startswith("items/") and rest.endswith("/file"):
+            return self._file(rest.split("/")[1], headers, body, resp)
+        if not sid:
+            return resp(428, {"error": "Zotero-Server-ID required"})
         key = headers.get("zotero-api-key")
         if key not in self.keys:
             return resp(401, {"error": "bad key"}, {"WWW-Authenticate": 'Zotero-API-Key realm="Zotero Local API"'})
@@ -191,6 +230,33 @@ class FakeZotero:
             self.lib_version = new_version
         return resp(200, {"success": success, "successful": successful,
                           "unchanged": unchanged, "failed": failed})
+
+    def _file(self, key, headers, body, resp):
+        import hashlib
+        from urllib.parse import parse_qs as pq
+        api_key = headers.get("zotero-api-key")
+        if api_key not in self.keys:
+            return resp(401, {"error": "bad key"})
+        if not self.keys[api_key]:
+            del self.keys[api_key]
+        item = self.items.get(key)
+        if not item or item.get("itemType") != "attachment" or item.get("linkMode") not in ("imported_file", "imported_url"):
+            return resp(400, {"error": "not a stored-file attachment"})
+        form = {k: v[0] for k, v in pq(body.decode()).items()}
+        if "upload" in form:
+            up = self.uploads.pop(form["upload"], None)
+            if not up or "bytes" not in up:
+                return resp(400, {"error": "upload missing"})
+            if hashlib.md5(up["bytes"]).hexdigest() != up["md5"]:
+                return resp(400, {"error": "md5 mismatch"})
+            self.files[key] = up["bytes"]
+            self.lib_version += 1
+            item.update(md5=up["md5"], filename=up["filename"], version=self.lib_version)
+            return resp(204, None)
+        upload_key = secrets.token_hex(8)
+        self.uploads[upload_key] = {"md5": form["md5"], "filename": form["filename"]}
+        return resp(200, {"url": f"/api/local/uploads/{upload_key}", "uploadKey": upload_key,
+                          "contentType": "application/pdf", "prefix": "", "suffix": ""})
 
     # ------------------------------------------------------------ adapters
 
