@@ -391,3 +391,55 @@ async def test_alert_cap_warning(settings, ext, fake, vault, monkeypatch):
     ro = Library(settings, ReadOnlyZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport()))
     res = await alerts.run(settings, today=dt.date(2026, 9, 28), ext=ext, lib=ro)
     assert any("only the newest 1" in w for w in res["warnings"])
+
+
+# ---------------------------------------------------------------- model test
+
+async def test_bakeoff_sample_submit_score(lib, settings, vault, monkeypatch):
+    from zotero_local_mcp import bakeoff as bk
+    lib.s = settings
+    b = bk.Bakeoff(lib)
+    res = await b.make_sample(n=3, seed=2)
+    ref = vault / "Inbox" / bk.REF_NOTE
+    table = bk.parse_reference(ref.read_text())
+    assert res["sample"] == 3 and len(table) == 3 and not any(table.values())
+    items = await b.items()
+    assert len(items["items"]) == 3 and "abstract" in items["items"][0] and items["vocabulary"]["tag_count"] == 9
+    keys = list(table)
+    gold = {keys[0]: "topic/asthma, type/cohort", keys[1]: "topic/spirometry", keys[2]: ""}
+    text = ref.read_text()
+    for k, tags in gold.items():
+        text = text.replace(f"| {k} |", f"| {k} |", 1)
+        lines = [ln if not ln.startswith(f"| {k} |") else ln.rstrip().rstrip("|").rstrip() + f" {tags} |"
+                 for ln in text.splitlines()]
+        text = "\n".join(lines)
+    ref.write_text(text)
+    with pytest.raises(SystemExit):
+        await b.make_sample(n=3)  # reference already filled
+    b.submit("opencode-go/model-a", [{"key": keys[0], "tags": ["topic/asthma", "type/cohort"]},
+                                     {"key": keys[1], "tags": ["topic/spirometry", "status/read", "made-up"]}])
+    out = b.submit("opencode-go/model-b", [{"key": keys[0], "tags": ["topic/copd"]}, {"key": "ZZZZ9999", "tags": []}])
+    assert out["missing_items"] == keys[1:] and out["not_in_sample"] == ["ZZZZ9999"]
+    (b.dir / "usage-model-a.json").write_text(json.dumps({"steps": 4, "tokens_in": 1000, "tokens_out": 200,
+                                                          "cost_usd": 0.01, "seconds": 90}))
+    res = b.score()
+    a, bb = res["results"]
+    assert res["items_scored"] == 2  # the empty reference row is skipped
+    assert a["model"] == "opencode-go/model-a" and a["edits"] == 0 and a["exact_items"] == 2
+    assert a["invalid_tags"] == 1 and a["status_tags"] == 1
+    assert bb["edits"] == 4 and bb["missing_items"] == 1 and bb["recall"] == 0.0
+    note = (vault / "Inbox" / bk.RESULTS_NOTE).read_text()
+    assert "| opencode-go/model-a | 0 | 0.0 |" in note and "1000/200" in note
+
+
+def test_usage_from_opencode_log(tmp_path):
+    from zotero_local_mcp.bakeoff import usage_from_log
+    log = tmp_path / "run.jsonl"
+    log.write_text("\n".join(json.dumps(e) for e in [
+        {"type": "text", "part": {"text": "hi"}},
+        {"type": "step_finish", "part": {"type": "step-finish", "tokens": {"input": 100, "output": 20,
+                                         "reasoning": 5, "cache": {"read": 50}}, "cost": 0.002}},
+        {"type": "step_finish", "part": {"type": "step-finish", "tokens": {"input": 10, "output": 1}, "cost": 0.001}},
+    ]) + "\nnot json\n")
+    u = usage_from_log(log)
+    assert u == {"steps": 2, "tokens_in": 160, "tokens_out": 26, "cost_usd": 0.003}

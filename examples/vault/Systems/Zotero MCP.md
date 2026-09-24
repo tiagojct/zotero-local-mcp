@@ -52,6 +52,20 @@ To stop the alerts, type `launchctl bootout gui/$(id -u)/local.zotero-alerts`.
 8. Librarian: ask it to attach an open-access PDF to that item. Open the PDF in Zotero.
 9. Researcher: ask "What do I have on FeNO?" and "Search PubMed for recent FeNO studies in children and tell me what I am missing."
 
+## Model test
+
+Use this test to choose the tagging model. It uses the same 25 items for every model and compares the proposals with your own tags. Nothing is written to the Zotero library.
+
+1. Start Zotero.
+2. In a terminal, type `cd ~/Projects/zotero-local-mcp`.
+3. Type `ZOTERO_MCP_ENV=~/.config/opencode/zotero.env uv run zotero-bakeoff sample`. The script writes Inbox/Model test reference.md.
+4. Open Inbox/Model test reference.md. In the last column, type the topic/, method/ and type/ tags that you would give, separated by commas. Do this before you run the models.
+5. Type `ZOTERO_MCP_ENV=~/.config/opencode/zotero.env uv run zotero-bakeoff run --model opencode-go/glm-5.3-flash --model opencode-go/mimo-v2.6-pro`. Each model runs once with the librarian agent. This takes some minutes.
+6. Type `ZOTERO_MCP_ENV=~/.config/opencode/zotero.env uv run zotero-bakeoff score`. The script writes Inbox/Model test results.md.
+7. Read the results. "Edits" is the number of tags that you would have to add or remove. Compare it with the cost and the time.
+
+To test another model, repeat step 5 with that model and then step 6. The results note shows all tested models. To make a new sample, type `... zotero-bakeoff sample --seed 2 --force`.
+
 ## Requests
 
 Librarian:

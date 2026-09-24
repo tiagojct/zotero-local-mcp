@@ -16,6 +16,7 @@ dependencies = [
 zotero-local-mcp = "zotero_local_mcp.server:main"
 zotero-scholar-mcp = "zotero_local_mcp.scholar_server:main"
 zotero-alerts = "zotero_local_mcp.alerts:main"
+zotero-bakeoff = "zotero_local_mcp.bakeoff:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]

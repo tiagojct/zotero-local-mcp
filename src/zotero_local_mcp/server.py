@@ -15,6 +15,7 @@ from .client import ZoteroError
 from .config import Settings
 from .external import External, ExternalError
 from .library import Library
+from .bakeoff import Bakeoff
 from .manage import Librarian
 
 INSTRUCTIONS = """\
@@ -337,6 +338,27 @@ async def attach_oa_pdfs(keys: list[str], dry_run: bool = True) -> dict:
     """Find legal open-access PDFs through Unpaywall and attach them (up to 25 items per call).
     The dry run shows source, version (published or accepted manuscript) and licence."""
     return await librarian().attach_oa_pdfs(keys, dry_run)
+
+
+# ---------------------------------------------------------------- model test
+
+class Proposal(BaseModel):
+    key: str
+    tags: list[str] = Field(default_factory=list)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def bakeoff_items() -> dict:
+    """Model test: the fixed sample of items (with abstracts) and the tag vocabulary."""
+    return await Bakeoff(lib()).items()
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+@safe
+async def bakeoff_submit(label: str, proposals: list[Proposal]) -> dict:
+    """Model test: save proposed tags for the sample (a local file, not the library)."""
+    return Bakeoff(lib()).submit(label, [p.model_dump() for p in proposals])
 
 
 def main() -> None:

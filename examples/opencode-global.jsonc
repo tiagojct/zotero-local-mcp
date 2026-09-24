@@ -59,6 +59,8 @@
         "zotero_find_duplicates": "allow",
         "zotero_check_retractions": "allow",
         "zotero_missing_pdfs": "allow",
+        "zotero_bakeoff_items": "allow",
+        "zotero_bakeoff_submit": "allow",
         "scholar_*": "deny",
         "webfetch": "deny",
         "websearch": "deny",
