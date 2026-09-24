@@ -11,8 +11,10 @@ items (tags, collections) or by moving items to the trash (deleted = true).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,7 @@ class WriteResult:
         self.unchanged: list[str] = []
         self.failed: dict[str, tuple[int, str]] = {}
         self.created: list[str] = []
+        self.created_at: dict[int, str] = {}  # position in the submitted list -> new key
         self.error: str | None = None  # set when a batch failed and the rest was not sent
         self.not_sent: list[str] = []
 
@@ -215,20 +218,21 @@ class LocalZotero:
         path: str,
         body: Any,
         extra_headers: dict[str, str] | None = None,
+        raw: bytes | None = None,
+        content_type: str = "application/json",
     ) -> httpx.Response:
         await self._ensure()
+        content = raw if raw is not None else json.dumps(body).encode()
         for attempt in range(2):
             key = self._key or await self.authorize()
             headers = {
                 "Zotero-Server-ID": self.server_id or "",
                 "Zotero-API-Key": key,
-                "Content-Type": "application/json",
+                "Content-Type": content_type,
                 **(extra_headers or {}),
             }
             try:
-                r = await self._http.request(
-                    method, self._url(path), content=json.dumps(body), headers=headers
-                )
+                r = await self._http.request(method, self._url(path), content=content, headers=headers)
             except httpx.HTTPError as exc:
                 raise ZoteroError(
                     f"Lost the connection to Zotero during a write: {exc!r}. "
@@ -268,6 +272,18 @@ class LocalZotero:
             out.extend(await self.get_json("items", {"itemKey": ",".join(chunk), "includeTrashed": 1}))
         return out
 
+    async def all_items(self) -> list[dict]:
+        """Every item including notes and attachments (not trashed)."""
+        return await self.get_json("items")
+
+    async def template(self, item_type: str, link_mode: str | None = None) -> dict:
+        cache = self.__dict__.setdefault("_templates", {})
+        ck = (item_type, link_mode)
+        if ck not in cache:
+            params = {"itemType": item_type, **({"linkMode": link_mode} if link_mode else {})}
+            cache[ck] = await self.get_json("/items/new", params)
+        return json.loads(json.dumps(cache[ck]))
+
     async def item(self, key: str) -> dict:
         return await self.get_json(f"items/{key}")
 
@@ -301,11 +317,47 @@ class LocalZotero:
         result = WriteResult()
         for i in range(0, len(objects), BATCH):
             chunk = objects[i : i + BATCH]
-            r = await self._write(
-                "POST", "items", chunk, {"Zotero-Write-Token": uuid.uuid4().hex}
-            )
-            self._collect(r, chunk, result, creating=True)
+            try:
+                r = await self._write(
+                    "POST", "items", chunk, {"Zotero-Write-Token": uuid.uuid4().hex}
+                )
+                self._collect(r, chunk, result, creating=True, offset=i)
+            except ZoteroError as exc:
+                result.error = str(exc)
+                result.not_sent = [str(n) for n in range(i, len(objects))]
+                break
         return result
+
+    async def upload_file(self, attachment_key: str, content: bytes, filename: str) -> None:
+        """Three-step local file upload into an imported attachment (Zotero 10 local API)."""
+        from urllib.parse import urlencode
+
+        md5 = hashlib.md5(content).hexdigest()
+        form = urlencode({"md5": md5, "filename": filename, "filesize": len(content),
+                          "mtime": int(time.time() * 1000)}).encode()
+        hdr = {"If-None-Match": "*"}
+        ctype = "application/x-www-form-urlencoded"
+        r = await self._write("POST", f"items/{attachment_key}/file", None, hdr, form, ctype)
+        if r.status_code != 200:
+            raise ZoteroError(f"File upload authorization failed: HTTP {r.status_code} {r.text[:200]}")
+        auth = r.json()
+        if auth.get("exists"):
+            return
+        body = (auth.get("prefix") or "").encode() + content + (auth.get("suffix") or "").encode()
+        url = auth["url"]
+        if url.startswith("/"):
+            url = str(httpx.URL(self.base).copy_with(path=url, query=None))
+        try:
+            up = await self._http.post(url, content=body,
+                                       headers={"Content-Type": auth.get("contentType") or "application/pdf"})
+        except httpx.HTTPError as exc:
+            raise ZoteroError(f"File upload failed: {exc!r}") from exc
+        if up.status_code not in (200, 201):
+            raise ZoteroError(f"File upload failed: HTTP {up.status_code} {up.text[:200]}")
+        reg = urlencode({"upload": auth["uploadKey"]}).encode()
+        r = await self._write("POST", f"items/{attachment_key}/file", None, hdr, reg, ctype)
+        if r.status_code != 204:
+            raise ZoteroError(f"File registration failed: HTTP {r.status_code} {r.text[:200]}")
 
     async def create_collection(self, name: str, parent: str | None) -> str:
         body = [{"name": name, "parentCollection": parent or False}]
@@ -322,7 +374,8 @@ class LocalZotero:
         return next(iter((data.get("successful") or {}).values()))["key"]
 
     @staticmethod
-    def _collect(r: httpx.Response, chunk: list[dict], result: WriteResult, creating: bool = False) -> None:
+    def _collect(r: httpx.Response, chunk: list[dict], result: WriteResult, creating: bool = False,
+                 offset: int = 0) -> None:
         if r.status_code == 413:
             raise ZoteroError("Zotero refused the batch as too large.")
         if r.status_code == 412:
@@ -333,9 +386,11 @@ class LocalZotero:
         data = r.json()
         success = data.get("success") or {}
         successful = data.get("successful") or {}
-        for idx in set(success) | set(successful):
+        for idx in sorted(set(success) | set(successful), key=int):
             key = success.get(idx) or successful[idx].get("key")
             (result.created if creating else result.succeeded).append(key)
+            if creating:
+                result.created_at[offset + int(idx)] = key
         for idx, key in (data.get("unchanged") or {}).items():
             result.unchanged.append(key if isinstance(key, str) else chunk[int(idx)].get("key", "?"))
         for idx, err in (data.get("failed") or {}).items():

@@ -1,22 +1,30 @@
 // ~/.config/opencode/opencode.jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  // Change at any time with /models. Add the key once with: opencode auth login -> OpenRouter
+  // Change at any time with /models. OpenRouter key: opencode auth login -> OpenRouter
   "model": "openrouter/z-ai/glm-5.3-flash",
+  // Shared Zotero rules, loaded in every session
+  "instructions": ["~/Notes/Systems/Zotero agent.md"],
   "mcp": {
     "zotero": {
       "type": "local",
       "command": ["uv", "run", "--directory", "/Users/you/Projects/zotero-local-mcp", "zotero-local-mcp"],
-      "environment": {
-        "ZOTERO_VOCAB": "/Users/you/Notes/Systems/Zotero tags.md"
-      },
+      "environment": { "ZOTERO_MCP_ENV": "/Users/you/.config/opencode/zotero.env" },
+      "enabled": true,
+      "timeout": 20000
+    },
+    "scholar": {
+      "type": "local",
+      "command": ["uv", "run", "--directory", "/Users/you/Projects/zotero-local-mcp", "zotero-scholar-mcp"],
+      "environment": { "ZOTERO_MCP_ENV": "/Users/you/.config/opencode/zotero.env" },
       "enabled": true,
       "timeout": 20000
     }
   },
+  // Default agents (build, plan): may read the library, may not change it, no research tools.
+  // Last matching rule wins.
   "permission": {
-    // Last matching rule wins: every Zotero tool asks, then the read-only ones are allowed.
-    "zotero_*": "ask",
+    "zotero_*": "deny",
     "zotero_status": "allow",
     "zotero_library_overview": "allow",
     "zotero_find_items": "allow",
@@ -25,6 +33,58 @@
     "zotero_list_tags": "allow",
     "zotero_get_vocabulary": "allow",
     "zotero_list_collections": "allow",
-    "zotero_history": "allow"
+    "scholar_*": "deny"
+  },
+  "agent": {
+    "librarian": {
+      "description": "Manages the Zotero library: tags, imports, metadata, duplicates, retractions, PDFs. No web.",
+      "mode": "primary",
+      "prompt": "{file:~/Notes/Systems/Zotero librarian.md}",
+      "permission": {
+        "zotero_*": "ask",
+        "zotero_status": "allow",
+        "zotero_library_overview": "allow",
+        "zotero_find_items": "allow",
+        "zotero_get_item": "allow",
+        "zotero_get_fulltext": "allow",
+        "zotero_list_tags": "allow",
+        "zotero_get_vocabulary": "allow",
+        "zotero_list_collections": "allow",
+        "zotero_history": "allow",
+        "zotero_audit_metadata": "allow",
+        "zotero_find_duplicates": "allow",
+        "zotero_check_retractions": "allow",
+        "zotero_missing_pdfs": "allow",
+        "scholar_*": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "task": "deny",
+        "bash": "deny",
+        "edit": "ask"
+      }
+    },
+    "researcher": {
+      "description": "Research assistant: PubMed/OpenAlex search, citation graph, literature notes, syntheses, manuscripts. Cannot change the library.",
+      "mode": "primary",
+      "prompt": "{file:~/Notes/Systems/Zotero researcher.md}",
+      "permission": {
+        "zotero_*": "deny",
+        "zotero_status": "allow",
+        "zotero_library_overview": "allow",
+        "zotero_find_items": "allow",
+        "zotero_get_item": "allow",
+        "zotero_get_fulltext": "allow",
+        "zotero_list_tags": "allow",
+        "zotero_get_vocabulary": "allow",
+        "zotero_list_collections": "allow",
+        "scholar_*": "allow",
+        "scholar_export_bibliography": "ask",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "task": "deny",
+        "bash": "deny",
+        "edit": "ask"
+      }
+    }
   }
 }

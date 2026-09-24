@@ -13,7 +13,9 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .client import ZoteroError
 from .config import Settings
+from .external import External, ExternalError
 from .library import Library
+from .manage import Librarian
 
 INSTRUCTIONS = """\
 Local Zotero library (Zotero 10 local API). Tags follow a controlled vocabulary
@@ -25,6 +27,8 @@ file with facets topic/, method/, type/, status/. Workflow rules:
 - Items tagged by the agent get the review marker tag (default _agent).
 - Every applied write is journaled; use history and undo to revert.
 - The first write opens a Zotero dialog; the user should choose 'Always Allow'.
+- Imports, repairs and PDFs use Crossref, PubMed, Open Library and Unpaywall
+  metadata. Keywords and MeSH headings are never imported as tags.
 """
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -33,6 +37,7 @@ WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHin
 
 mcp = MCPServer("zotero", instructions=INSTRUCTIONS, version=__version__)
 _lib: Library | None = None
+_librarian: Librarian | None = None
 
 
 def lib() -> Library:
@@ -40,6 +45,14 @@ def lib() -> Library:
     if _lib is None:
         _lib = Library(Settings.from_env())
     return _lib
+
+
+def librarian() -> Librarian:
+    global _librarian
+    if _librarian is None:
+        s = lib().s
+        _librarian = Librarian(lib(), External(s.email, s.ncbi_api_key, s.openalex_api_key))
+    return _librarian
 
 
 class TagChange(BaseModel):
@@ -55,7 +68,7 @@ def safe(fn):
     async def wrapper(*args, **kwargs):
         try:
             return await fn(*args, **kwargs)
-        except (ZoteroError, LookupError, ValueError) as exc:
+        except (ZoteroError, ExternalError, LookupError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001 - the agent must see what went wrong
             raise ToolError(f"Unexpected {type(exc).__name__}: {exc}") from exc
@@ -247,6 +260,83 @@ async def undo(journal_id: str | None = None, dry_run: bool = True) -> dict:
     """Revert a journaled write (default: the most recent one not yet undone). Items edited
     after that write are skipped and reported."""
     return await lib().undo(journal_id, dry_run)
+
+
+# ---------------------------------------------------------------- librarian tools
+
+@mcp.tool(annotations=WRITE)
+@safe
+async def import_identifiers(identifiers: list[str], collection_key: str | None = None,
+                             tags: list[str] | None = None, dry_run: bool = True) -> dict:
+    """Add items by DOI, PMID (pmid:123) or ISBN (isbn:978...). Metadata comes from Crossref,
+    PubMed and Open Library. Items already in the library are skipped (matched by DOI, PMID,
+    ISBN or title and year). New items get a citekey, the review marker and the given
+    vocabulary tags, optionally a collection. No keywords or MeSH tags are imported."""
+    return await librarian().import_identifiers(identifiers, collection_key, tags, dry_run)
+
+
+@mcp.tool(annotations=WRITE)
+@safe
+async def import_queue(path: str | None = None, collection_key: str | None = None,
+                       tags: list[str] | None = None, dry_run: bool = True) -> dict:
+    """Import the ticked lines (- [x]) of the import queue note, or of another note such as a
+    literature alert (path). Lines must contain doi:, pmid: or isbn:. After the import the
+    lines are marked (imported: citekey)."""
+    return await librarian().import_queue(path, collection_key, tags, dry_run)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def audit_metadata(item_type: str | None = None, problem: str | None = None,
+                         limit: int = 50, offset: int = 0) -> dict:
+    """Find items with incomplete metadata: no DOI, abstract, journal, year, authors, ISBN,
+    publisher; malformed DOI; title in capitals. problem filters by one problem name."""
+    return await librarian().audit(item_type, problem, limit, offset)
+
+
+@mcp.tool(annotations=WRITE)
+@safe
+async def repair_metadata(keys: list[str], overwrite: bool = False, min_confidence: float = 0.9,
+                          dry_run: bool = True) -> dict:
+    """Fill empty fields from Crossref/PubMed/Open Library. Items with a DOI, PMID or ISBN match
+    exactly; others are matched by title search with a confidence score (0-1) and changed only
+    at or above min_confidence. overwrite=true also replaces differing values (never title or
+    authors). Returns matches with confidence for review."""
+    return await librarian().repair(keys, overwrite, min_confidence, dry_run)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def find_duplicates() -> dict:
+    """Groups of likely duplicate items (same DOI, PMID, ISBN, or title and year).
+    Merging is done by the user in Zotero's Duplicate Items view."""
+    return await librarian().duplicates()
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def check_retractions(keys: list[str] | None = None, refresh: bool = False,
+                            limit: int = 200) -> dict:
+    """Check items with a DOI for retractions, expressions of concern and corrections
+    (Crossref, including Retraction Watch data). Results are cached for 30 days; call again
+    while still_unchecked > 0."""
+    return await librarian().retractions(keys, refresh, limit)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def missing_pdfs(item_type: str | None = None, with_doi_only: bool = False,
+                       limit: int = 50, offset: int = 0) -> dict:
+    """Items without a PDF attachment, with counts by item type."""
+    return await librarian().missing_pdfs(item_type, with_doi_only, limit, offset)
+
+
+@mcp.tool(annotations=WRITE)
+@safe
+async def attach_oa_pdfs(keys: list[str], dry_run: bool = True) -> dict:
+    """Find legal open-access PDFs through Unpaywall and attach them (up to 25 items per call).
+    The dry run shows source, version (published or accepted manuscript) and licence."""
+    return await librarian().attach_oa_pdfs(keys, dry_run)
 
 
 def main() -> None:

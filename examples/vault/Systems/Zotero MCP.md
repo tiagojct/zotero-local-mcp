@@ -1,12 +1,22 @@
-Local MCP server that lets an AI agent (OpenCode, Claude Code) read and edit the Zotero library on [[ahab]]. It uses the Zotero 10 local API only: no zotero.org key, and WebDAV file sync is not affected.
+Two AI agents in OpenCode that work on the Zotero library on [[ahab]]: a librarian that changes the library and a researcher that searches the literature and writes in the vault. They use the Zotero 10 local API (no zotero.org key; WebDAV file sync is not affected), plus PubMed, OpenAlex, Crossref, Unpaywall and Open Library.
 
 - Code: ~/Projects/zotero-local-mcp (git, see README.md)
-- Agent rules: [[Zotero agent]]
-- Tag vocabulary: [[Zotero tags]]
-- OpenCode, global config: ~/.config/opencode/opencode.jsonc (model, Zotero server, permissions). Backup of the old file: opencode.jsonc.bak-2026-09-24
-- OpenCode, vault config: Notes/.opencode/opencode.jsonc (loads .claude/CLAUDE.md and [[Zotero agent]])
-- Journal of all changes: ~/.local/share/zotero-local-mcp/journal/
+- Shared rules: [[Zotero agent]]. Role prompts: [[Zotero librarian]], [[Zotero researcher]]
+- Tag vocabulary: [[Zotero tags]]. Saved searches for alerts: [[Literature alerts]]
+- Settings (email, API keys, paths): ~/.config/opencode/zotero.env
+- OpenCode config: ~/.config/opencode/opencode.jsonc (model, servers, agents, permissions). In the vault: Notes/.opencode/opencode.jsonc
+- Journal of all library changes: ~/.local/share/zotero-local-mcp/journal/
 - Model: OpenRouter, z-ai/glm-5.3-flash. Change it with /models in OpenCode.
+
+## Roles
+
+| | Librarian | Researcher |
+|---|---|---|
+| Changes the Zotero library | yes, after approval | no |
+| Web and outside search | no (only metadata inside its tools) | yes |
+| Writes notes in the vault | review files in Inbox | literature notes, syntheses, import queue |
+
+Hand-off: the researcher adds works to Inbox/Zotero import queue.md. Tick the lines you want. Ask the librarian to import them.
 
 ## First setup
 
@@ -14,48 +24,67 @@ Local MCP server that lets an AI agent (OpenCode, Claude Code) read and edit the
 2. Copy the folder ~/Zotero to a backup location.
 3. Start Zotero.
 4. In Zotero, open Settings > Advanced. Select "Allow other applications on this computer to communicate with Zotero".
-5. Open a terminal. Type `cd ~/Projects/zotero-local-mcp && uv sync && uv run pytest -q`. Make sure that all tests pass.
-6. Type `ZOTERO_VOCAB="$HOME/Notes/Systems/Zotero tags.md" uv run zotero-local-mcp --check`. Make sure that the result shows `"zotero": "reachable"` and no vocabulary problems.
-7. Type `opencode auth login`. Select OpenRouter. Paste the OpenRouter key.
-8. In OpenRouter, open Settings > Privacy. Turn on zero data retention.
-9. Delete ~/Projects/zotero-local-mcp.tar.gz.
+5. Open ~/.config/opencode/zotero.env in a text editor. Type your email address after ZOTERO_CONTACT_EMAIL=. Save the file.
+6. Open a terminal. Type `cd ~/Projects/zotero-local-mcp && uv sync && uv run pytest -q`. Make sure that all tests pass.
+7. Type `ZOTERO_MCP_ENV=~/.config/opencode/zotero.env uv run zotero-local-mcp --check`. Make sure that the result shows `"zotero": "reachable"` and no vocabulary problems.
+8. Type `opencode auth login`. Select OpenRouter. Paste the OpenRouter key.
+9. In OpenRouter, open Settings > Privacy. Turn on zero data retention.
+
+## Weekly alerts (optional)
+
+1. Edit the searches in [[Literature alerts]].
+2. In the terminal, type `ZOTERO_MCP_ENV=~/.config/opencode/zotero.env uv run zotero-alerts` in ~/Projects/zotero-local-mcp. Make sure that a note appears in Inbox/.
+3. Type `cp ~/Projects/zotero-local-mcp/examples/launchd/local.zotero-alerts.plist ~/Library/LaunchAgents/`.
+4. Type `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.zotero-alerts.plist`.
+5. The script runs every Monday at 07:30. The log is ~/Library/Logs/zotero-alerts.log.
+
+To stop the alerts, type `launchctl bootout gui/$(id -u)/local.zotero-alerts`.
 
 ## First test
 
 1. Start Zotero.
-2. Type `cd ~/Notes && opencode`.
-3. Ask: "Run zotero status and library_overview."
-4. Ask the agent to add topic/spirometry to 3 items. Approve the preview.
-5. When Zotero shows the authorization dialog, click Always Allow.
-6. In Zotero, look at the 3 items. Make sure that they have topic/spirometry and _agent.
-7. Ask: "Undo the last change." Make sure that the tags are gone.
-8. Make a test item in Zotero. Ask the agent to move it to the trash, then to undo. Make sure that the item comes back.
-9. Ask the agent to set the citekey of one item. Make sure that the key is in the Citation Key field or in Extra.
+2. Type `cd ~/Notes && opencode`. OpenCode starts with the researcher. Press Tab to switch between the researcher and the librarian.
+3. Librarian: ask "Run status and library_overview."
+4. Librarian: ask it to add topic/spirometry to 3 items. Approve the preview. When Zotero shows the authorization dialog, click Always Allow.
+5. In Zotero, make sure that the 3 items have topic/spirometry and _agent. Then ask "Undo the last change."
+6. Make a test item in Zotero. Ask the librarian to move it to the trash, then to undo. Make sure that the item comes back.
+7. Librarian: ask it to import one DOI. Make sure that the new item has an abstract, a citekey in Extra (or in the Citation Key field) and no MeSH tags.
+8. Librarian: ask it to attach an open-access PDF to that item. Open the PDF in Zotero.
+9. Researcher: ask "What do I have on FeNO?" and "Search PubMed for recent FeNO studies in children and tell me what I am missing."
 
-## Daily use
+## Requests
 
-Start Zotero before OpenCode. Start OpenCode in the vault (`cd ~/Notes && opencode`), so that it loads the vault rules.
-
-Examples of requests:
-
+Librarian:
 - "Give me a library overview."
-- "Clean the existing tags." The agent writes Inbox/Zotero tag mapping.md. Edit it, then say "Apply the mapping."
-- "Tag the next batch of untagged items." The agent writes Inbox/Zotero tag review NN.md. Edit the proposed tags, then say "Apply batch NN."
+- "Clean the existing tags." Edit Inbox/Zotero tag mapping.md, then say "Apply the mapping."
+- "Tag the next batch of untagged items." Edit Inbox/Zotero tag review NN.md, then say "Apply batch NN."
 - "Set citekeys for all items without one."
+- "Import 10.1183/13993003.00001-2026 and pmid:39000001."
+- "Import the ticked items from the queue." or "... from Inbox/Literature alerts 2026-09-28.md."
+- "Audit the metadata. Start with journal articles without a DOI." Then "Repair these."
+- "Find duplicates." Merge them in Zotero (Duplicate Items).
+- "Check the library for retractions."
+- "Which items have no PDF? Attach the open-access ones."
+- "Show the history." and "Undo the last change."
+
+Researcher:
+- "What do I have on spirometry in older adults?"
+- "Search PubMed and OpenAlex for LLM-based clinical decision support since 2024. What am I missing?" Then "Queue the first five."
+- "Show the citation graph of jacinto2026."
 - "Make a literature note for jacinto2026." The note goes to Resources/Zotero/jacinto2026.md.
-- "Make literature notes for all items tagged topic/feno and status/read." The agent asks first when there are more than 10.
-- "What do I have on FeNO in children?" The agent answers in the chat with citekeys.
-- "Write a synthesis of my references on spirometry reference equations in older adults." The agent shows the list first, you choose, and the note goes to Workshop/ with [@citekey] citations.
-- "Show the history" and "Undo the last change."
+- "Write a synthesis of my references on FeNO in children." The note goes to Workshop/.
+- "Check the citations in ~/Papers/draft.qmd and write the bibliography."
+- "Summarise this week's literature alert."
 
 ## Review
 
-- Items tagged by the agent have the tag _agent. In Zotero, click _agent in the tag selector to see them.
-- When the review is done, ask: "Remove the _agent tag from all items."
-- Automatic tags (MeSH) stay until the library is tagged. Then ask: "Remove all automatic tags."
+- Items that the librarian changed or imported have the tag _agent. In Zotero, click _agent in the tag selector to see them.
+- When the review is done, ask the librarian: "Remove the _agent tag from all items."
+- Automatic tags (MeSH) stay until the library is tagged. Then ask the librarian: "Remove all automatic tags."
 
 ## Limits
 
-- The agent reads the text that Zotero indexed. If a PDF is only on the WebDAV server, open it once in Zotero, then right-click the attachment and select Reindex Item.
+- The agents read the text that Zotero indexed. If a PDF is only on the WebDAV server, open it once in Zotero, then right-click the attachment and select Reindex Item.
 - Titles, abstracts and full texts go to the model provider through OpenRouter.
-- Write tools ask for approval in OpenCode. Read tools do not.
+- The librarian asks before each write. The researcher asks before it edits a file or writes a bibliography.
+- Duplicates are merged by you in Zotero; the librarian only finds them.

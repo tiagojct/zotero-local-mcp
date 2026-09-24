@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.zotero-alerts</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd "$HOME/Projects/zotero-local-mcp" &amp;&amp; uv run zotero-alerts</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ZOTERO_MCP_ENV</key>
+    <string>/Users/you/.config/opencode/zotero.env</string>
+  </dict>
+  <!-- Every Monday at 07:30. If the Mac is asleep, it runs at the next wake. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>7</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/you/Library/Logs/zotero-alerts.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/zotero-alerts.log</string>
+</dict>
+</plist>
