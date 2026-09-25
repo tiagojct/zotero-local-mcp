@@ -472,3 +472,45 @@ async def test_researcher_attaches_linked_note(scholar, lib, fake, vault):
     lib.s = scholar.s
     out = await lib.undo(dry_run=False)
     assert out["applied"] == 1 and fake.items[res["created"]]["deleted"] is True
+
+
+# ---------------------------------------------------------------- Sub-Sub model test tasks
+
+async def test_bench_prepare(lib, fake, ext, settings, tmp_path, monkeypatch):
+    from fake_external import PUBMED
+    from zotero_local_mcp import bench
+    from zotero_local_mcp.bakeoff import Bakeoff
+    lib.s = settings
+    pmid = next(iter(PUBMED))
+    monkeypatch.setattr(bench, "NEW_DOIS", ["10.1000/missing", "10.1183/13993003.00001-2026"])
+    monkeypatch.setattr(bench, "NEW_PMIDS", [pmid])
+    # reviewed items (no _agent) and agent-tagged items, all on one topic
+    for n in range(8):
+        tags = [{"tag": "topic/asthma"}, {"tag": "status/read"}] + ([{"tag": "_agent"}] if n % 2 else [])
+        fake.add_item(key=f"ITEM{n:04d}".replace("0", "Q"), title=f"Asthma study {n}", date="2020",
+                      abstractNote=f"Abstract {n}", DOI=f"10.1000/asthma.{n}", tags=tags,
+                      extra=f"Citation Key: author{n}2020",
+                      creators=[{"creatorType": "author", "firstName": "A", "lastName": f"Author{n}"}])
+    att = fake.add_item(itemType="attachment", parentItem="ITEMQQQ3", contentType="application/pdf",
+                        title="PDF", linkMode="imported_file")
+    fake.fulltext[att] = {"content": "x" * 9000, "indexedPages": 5, "totalPages": 5}
+    out = tmp_path / "bench"
+    res = await bench.prepare(lib, ext, out, seed=1, n=6)
+    tasks = json.loads((out / "tasks.json").read_text())
+    assert res["tagging_items"] == 6 and res["reviewed_reference"] == 3
+    gold = tasks["tagging"]["gold_reviewed"]
+    assert all(v == ["topic/asthma"] for v in gold.values())  # status and _agent are not scored
+    assert len(tasks["tagging"]["blind_reference_keys"]) == 3
+    ref = (out / "reference.md").read_text()
+    assert "Abstract" in ref and "topic/asthma" not in ref  # blind: no current tags
+    assert "AAAA1111" in tasks["facet_fix"]["missing_topic"]
+    assert tasks["lit_note"]["key"] == "ITEMQQQ3"
+    assert tasks["synthesis"]["topic"] == "topic/asthma" and len(tasks["synthesis"]["keys"]) == 8
+    ids = [x["id"] for x in tasks["import"]["new"]]
+    assert ids == ["10.1183/13993003.00001-2026", f"PMID:{pmid}"]
+    assert tasks["import"]["in_library"]["id"].startswith("10.1000/asthma.")
+    index = json.loads((out / "library-index.json").read_text())
+    assert any(r["citekey"] == "author32020" for r in index)
+    # bakeoff_items uses the same sample and hides the current tags
+    items = (await Bakeoff(lib).items())["items"]
+    assert len(items) == 6 and all("tags" not in i and "automatic_tags" not in i for i in items)

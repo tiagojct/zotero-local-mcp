@@ -105,7 +105,10 @@ class Bakeoff:
         found = {i["key"]: i for i in await self.lib.z.items_by_keys(sample["keys"])}
         vocab = self.lib.vocab.require()
         return {
-            "items": [self.lib.summarize(found[k], detail=True) for k in sample["keys"] if k in found],
+            # Current tags are hidden, so a model cannot copy an earlier model's tags.
+            "items": [{k2: v for k2, v in self.lib.summarize(found[k], detail=True).items()
+                       if k2 not in ("tags", "automatic_tags")}
+                      for k in sample["keys"] if k in found],
             "vocabulary": vocab.as_dict(),
             "rules": "topic/: 1 to 4 per item, most specific first. method/ and type/: only when they apply. "
                      "No status/ tags. Vocabulary tags only.",
