@@ -16,7 +16,7 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 - Each item write sends the item version; concurrent edits in Zotero are kept.
 - Every applied write goes to a journal (`~/.local/share/zotero-local-mcp/journal/`). `undo` reverts it, skipping items edited since. Imports and attached PDFs are undone by moving them to the trash.
 - No DELETE requests. Items go to the trash.
-- The researcher's library client refuses writes. Works it proposes go to an import queue note that a person ticks; the librarian imports the ticked lines. Queue labels are sanitised so they cannot create or tick lines.
+- The researcher's library client refuses every write except creating a new child note (attach_note: a short summary plus an obsidian:// link, journaled, undone by the librarian). Works it proposes go to an import queue note that a person ticks; the librarian imports the ticked lines. Queue labels are sanitised so they cannot create or tick lines.
 - Duplicate detection by title needs the same year and first author, and no conflicting DOI/PMID.
 
 ## Tools
@@ -28,7 +28,7 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 | list_tags, get_vocabulary | update_fields, file_items, create_collection | library_lookup |
 | list_collections, history | create_note, trash_items, undo | check_manuscript |
 | audit_metadata, find_duplicates | import_identifiers, import_queue | export_bibliography |
-| check_retractions, missing_pdfs | repair_metadata, attach_oa_pdfs | queue_imports |
+| check_retractions, missing_pdfs | repair_metadata, attach_oa_pdfs | queue_imports, attach_note |
 
 ## Requirements
 

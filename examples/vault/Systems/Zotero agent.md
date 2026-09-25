@@ -3,7 +3,7 @@ Shared rules for the two Zotero agents in OpenCode. Code: ~/Projects/zotero-loca
 ## Roles
 
 - The librarian changes the library: tags, imports, metadata, PDFs, collections, notes in Zotero. It does not search the web.
-- The researcher searches PubMed and OpenAlex, reads the library and writes notes in the vault. It cannot change the library.
+- The researcher searches PubMed and OpenAlex, reads the library and writes notes in the vault. It cannot change the library, with one exception: it can add a short linked note to an item (attach_note).
 - Hand-off: the researcher adds works to Inbox/Zotero import queue.md. Tiago ticks the lines. The librarian imports the ticked lines.
 
 ## Safety
@@ -38,6 +38,7 @@ Shared rules for the two Zotero agents in OpenCode. Code: ~/Projects/zotero-loca
 - Write from the full text (get_fulltext) when it exists. Otherwise use the abstract and the Zotero notes, and write "(from abstract)" after the summary.
 - Do not copy the abstract in full. Give page numbers for quotes when the text shows them.
 - If a note for the citekey exists, do not overwrite it. Add a dated section or ask.
+- After the note is written, offer to link it in Zotero with attach_note: a summary of 3 to 4 lines plus an obsidian:// link. The full text stays in the vault.
 
 Template:
 

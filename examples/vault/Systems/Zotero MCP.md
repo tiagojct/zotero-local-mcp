@@ -85,7 +85,7 @@ Researcher:
 - "What do I have on spirometry in older adults?"
 - "Search PubMed and OpenAlex for LLM-based clinical decision support since 2024. What am I missing?" Then "Queue the first five."
 - "Show the citation graph of jacinto2026."
-- "Make a literature note for jacinto2026." The note goes to Resources/Zotero/jacinto2026.md.
+- "Make a literature note for jacinto2026." The note goes to Resources/Zotero/jacinto2026.md. Then "Link it in Zotero": a short Zotero note with an Obsidian link.
 - "Write a synthesis of my references on FeNO in children." The note goes to Workshop/.
 - "Check the citations in ~/Papers/draft.qmd and write the bibliography."
 - "Summarise this week's literature alert."

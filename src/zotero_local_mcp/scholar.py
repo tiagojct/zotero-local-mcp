@@ -38,6 +38,21 @@ class ReadOnlyZotero(LocalZotero):
         raise ZoteroError("The researcher cannot write to Zotero. Use the import queue.")
 
 
+class NoteOnlyZotero(LocalZotero):
+    """Researcher client: reads, plus creating new child notes on items. Nothing else:
+    no edits to existing items or notes, no tags, no trash, no imports."""
+
+    async def _write(self, method, path, body, extra_headers=None, raw=None,
+                     content_type="application/json"):
+        ok = (method == "POST" and path == "items" and raw is None and isinstance(body, list) and body
+              and all(isinstance(o, dict) and o.get("itemType") == "note" and o.get("parentItem")
+                      and "key" not in o and "version" not in o for o in body))
+        if not ok:
+            raise ZoteroError("The researcher can only add new notes to items. "
+                              "Other changes go through the librarian (import queue).")
+        return await super()._write(method, path, body, extra_headers, raw, content_type)
+
+
 def short_authors(rec: dict, n: int = 3) -> str:
     names = [a.get("family") or a.get("name") or "" for a in rec.get("authors") or []]
     names = [x for x in names if x]
@@ -48,7 +63,7 @@ class Scholar:
     def __init__(self, settings: Settings, ext: External, lib: Library | None = None) -> None:
         self.s = settings
         self.ext = ext
-        self.lib = lib or Library(settings, ReadOnlyZotero(settings.api_url, settings.state_dir,
+        self.lib = lib or Library(settings, NoteOnlyZotero(settings.api_url, settings.state_dir,
                                                             settings.auth_timeout))
 
     async def index(self) -> LibraryIndex:
@@ -289,6 +304,58 @@ class Scholar:
         return {"written": str(out), "entries": len(entries), "missing_citekeys": missing,
                 "items_without_citekey": no_key,
                 "note": "Items without a citekey need the librarian (set_citekeys)." if no_key else None}
+
+    # ------------------------------------------------------------ linked note in Zotero
+
+    async def attach_note(self, key: str, summary: str, note_path: str, dry_run: bool = True) -> dict:
+        """Add a short child note to an item: the summary plus an obsidian:// link to the vault note."""
+        import html as _html
+        from urllib.parse import quote
+
+        import markdown as md
+
+        from .library import regular
+
+        vault = self.s.vault
+        if vault is None:
+            raise ZoteroError("Set ZOTERO_VAULT first.")
+        p = Path(note_path).expanduser()
+        p = (p if p.is_absolute() else vault / p).resolve()
+        if vault.resolve() not in p.parents or p.suffix != ".md" or not p.exists():
+            raise ZoteroError(f"The linked note must be an existing .md file in the vault: {note_path}")
+        summary = (summary or "").strip()
+        if not summary:
+            raise ZoteroError("Give a short summary (a few lines).")
+        if len(summary) > 1500:
+            raise ZoteroError("Keep the summary under 1500 characters; the full text stays in the vault note.")
+        item = await self.lib.z.item(key)
+        if not regular(item):
+            raise ZoteroError("Notes can only be attached to regular items.")
+        rel = p.relative_to(vault.resolve()).with_suffix("").as_posix()
+        uri = f"obsidian://open?vault={quote(vault.name)}&file={quote(rel, safe='')}"
+        for child in await self.lib.z.children(key):
+            if child["data"].get("itemType") == "note" and uri in _html.unescape(child["data"].get("note", "")):
+                return {"skipped": "this item already has a note linking to that vault note",
+                        "note": child["key"]}
+        body = md.markdown(_html.escape(summary, quote=False), extensions=["sane_lists"])
+        link = f'<p><a href="{_html.escape(uri)}">Obsidian: {_html.escape(p.stem)}</a></p>'
+        if dry_run:
+            return {"dry_run": True, "item": label(item["data"]), "summary": summary, "link": uri,
+                    "next": "Nothing was written. Call again with dry_run=false after approval."}
+        tags = [{"tag": self.s.marker}] if self.s.marker else []
+        res = await self.lib.z.create_items([{
+            "itemType": "note", "parentItem": key, "note": f"<div>{body}{link}</div>",
+            "tags": tags, "collections": [], "relations": {},
+        }])
+        if not res.created:
+            raise ZoteroError(f"Creating the note failed: {res.error or res.failed}")
+        note_key = res.created[0]
+        jid = (await self.lib.journal()).record(
+            "attach_note", f"linked note on {key}",
+            [{"key": note_key, "item": f"note on {label(item['data'])}",
+              "before": {"deleted": True}, "after": {"deleted": False}}])
+        return {"created": note_key, "item": label(item["data"]), "link": uri, "journal_id": jid,
+                "undo": "Ask the librarian to undo this journal entry if the note is not wanted."}
 
     # ------------------------------------------------------------ import queue
 

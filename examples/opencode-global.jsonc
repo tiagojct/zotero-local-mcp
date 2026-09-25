@@ -87,6 +87,7 @@
         "zotero_list_collections": "allow",
         "scholar_*": "allow",
         "scholar_export_bibliography": "ask",
+        "scholar_attach_note": "ask",
         "webfetch": "allow",
         "websearch": "allow",
         "task": "deny",

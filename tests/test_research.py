@@ -54,7 +54,8 @@ def librarian(lib, ext, settings):
 
 @pytest.fixture
 def scholar(fake, ext, settings):
-    ro = ReadOnlyZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport())
+    from zotero_local_mcp.scholar import NoteOnlyZotero
+    ro = NoteOnlyZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport())
     return Scholar(settings, ext, Library(settings, ro))
 
 
@@ -247,9 +248,11 @@ async def test_missing_and_attach_pdfs(librarian, fake):
 
 async def test_researcher_cannot_write(scholar):
     res = await scholar.lib.tag_items([{"key": "AAAA1111", "add": ["topic/asthma"]}], dry_run=False)
-    assert res["applied"] == 0 and "cannot write" in res["error"]
-    with pytest.raises(ZoteroError, match="cannot write"):
+    assert res["applied"] == 0 and "only add new notes" in res["error"]
+    with pytest.raises(ZoteroError, match="only add new notes"):
         await scholar.lib.create_collection("x", dry_run=False)
+    res = await scholar.lib.trash_items(["AAAA1111"], dry_run=False)
+    assert res["applied"] == 0 and "only add new notes" in res["error"]
 
 
 async def test_search_and_graph_flag_library_items(scholar, fake):
@@ -339,7 +342,7 @@ async def test_scholar_server_lists_tools(tmp_path):
         await s.initialize()
         names = {t.name for t in (await s.list_tools()).tools}
     assert names == {"search_pubmed", "search_openalex", "get_work", "citation_graph", "library_lookup",
-                     "check_manuscript", "export_bibliography", "queue_imports"}
+                     "check_manuscript", "export_bibliography", "queue_imports", "attach_note"}
 
 
 async def test_librarian_server_lists_new_tools(tmp_path):
@@ -443,3 +446,29 @@ def test_usage_from_opencode_log(tmp_path):
     ]) + "\nnot json\n")
     u = usage_from_log(log)
     assert u == {"steps": 2, "tokens_in": 160, "tokens_out": 26, "cost_usd": 0.003}
+
+
+async def test_researcher_attaches_linked_note(scholar, lib, fake, vault):
+    note = vault / "Resources" / "Zotero" / "jacinto2026.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# note")
+    with pytest.raises(ZoteroError, match="existing .md file"):
+        await scholar.attach_note("AAAA1111", "x", "Resources/Zotero/missing.md")
+    with pytest.raises(ZoteroError, match="existing .md file"):
+        await scholar.attach_note("AAAA1111", "x", "/etc/passwd")
+    prev = await scholar.attach_note("AAAA1111", "Cohort of 500 children.", "Resources/Zotero/jacinto2026.md")
+    assert prev["dry_run"] and prev["link"] == "obsidian://open?vault=vault&file=Resources%2FZotero%2Fjacinto2026"
+    before = set(fake.items)
+    res = await scholar.attach_note("AAAA1111", "Cohort of **500** children. <script>x</script>",
+                                    str(note), dry_run=False)
+    new = fake.items[res["created"]]
+    assert new["parentItem"] == "AAAA1111" and new["tags"] == [{"tag": "_agent"}]
+    assert "<strong>500</strong>" in new["note"] and "<script>" not in new["note"]
+    assert "obsidian://open?vault=vault&amp;file=Resources%2FZotero%2Fjacinto2026" in new["note"]
+    again = await scholar.attach_note("AAAA1111", "Other summary", str(note), dry_run=False)
+    assert "already has a note" in again["skipped"]
+    assert set(fake.items) - before == {res["created"]}
+    # The librarian can undo it from the shared journal
+    lib.s = scholar.s
+    out = await lib.undo(dry_run=False)
+    assert out["applied"] == 1 and fake.items[res["created"]]["deleted"] is True
