@@ -41,6 +41,9 @@ class WriteResult:
         self.not_sent: list[str] = []
 
 
+WEB_API = "https://api.zotero.org"
+
+
 class LocalZotero:
     def __init__(
         self,
@@ -48,6 +51,7 @@ class LocalZotero:
         state_dir: Path | None = None,
         auth_timeout: float = 300.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        web_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base = api_url.rstrip("/")
         self.prefix = f"{self.base}/users/0"
@@ -69,10 +73,18 @@ class LocalZotero:
             },
         )
 
+        # Only for item templates (Zotero's local API does not serve them).
+        self._web = httpx.AsyncClient(
+            timeout=30.0,
+            transport=web_transport or transport,
+            headers={"User-Agent": f"{APP_NAME}/{__version__}", "Zotero-API-Version": "3"},
+        )
+
     # ------------------------------------------------------------------ setup
 
     async def aclose(self) -> None:
         await self._http.aclose()
+        await self._web.aclose()
 
     async def connect(self) -> None:
         try:
@@ -277,12 +289,43 @@ class LocalZotero:
         return await self.get_json("items")
 
     async def template(self, item_type: str, link_mode: str | None = None) -> dict:
+        """An empty item of this type, with every field its type allows.
+
+        Zotero 10's local API has no /items/new, so the template comes from, in
+        order: the local API (if a later Zotero adds it), a copy saved earlier,
+        or the public web API (only the item type is sent)."""
         cache = self.__dict__.setdefault("_templates", {})
         ck = (item_type, link_mode)
         if ck not in cache:
             params = {"itemType": item_type, **({"linkMode": link_mode} if link_mode else {})}
-            cache[ck] = await self.get_json("/items/new", params)
+            try:
+                cache[ck] = await self.get_json("/items/new", params)
+            except ZoteroError as exc:
+                if not str(exc).startswith("Not found"):
+                    raise
+                cache[ck] = await self._saved_or_web_template(item_type, link_mode, params)
         return json.loads(json.dumps(cache[ck]))
+
+    async def _saved_or_web_template(self, item_type: str, link_mode: str | None, params: dict) -> dict:
+        path = self.state_dir / "templates" / f"{item_type}{'-' + link_mode if link_mode else ''}.json"
+        if path.exists():
+            try:
+                return json.loads(path.read_text())
+            except ValueError:
+                pass
+        try:
+            r = await self._web.get(f"{WEB_API}/items/new", params=params)
+        except httpx.HTTPError as exc:
+            raise ZoteroError(
+                f"No item template for {item_type}: Zotero's local API has none and "
+                f"api.zotero.org could not be reached ({type(exc).__name__}). Check the internet connection."
+            ) from exc
+        if r.status_code != 200:
+            raise ZoteroError(f"No item template for {item_type}: api.zotero.org answered HTTP {r.status_code}.")
+        data = r.json()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
+        return data
 
     async def item(self, key: str) -> dict:
         return await self.get_json(f"items/{key}")

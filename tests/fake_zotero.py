@@ -53,6 +53,8 @@ class FakeZotero:
         self.write_requests = 0
         self.seen_headers: list[dict] = []
         self.fulltext: dict[str, dict] = {}
+        self.local_templates = False  # like real Zotero 10: no /api/items/new
+        self.web_template_requests = 0
         self.uploads: dict[str, dict] = {}
         self.files: dict[str, bytes] = {}
 
@@ -111,11 +113,19 @@ class FakeZotero:
             return resp(412, {"error": "server id mismatch"})
         if path in ("/api", "/api/"):
             return resp(200, {})
-        if path == "/api/items/new":
+        if parts.netloc == "api.zotero.org":
+            # The public web API serves item templates; Zotero 10's local API does not.
+            self.web_template_requests += 1
+            if path != "/items/new":
+                return resp(404, {"error": "Not found"})
             t = q.get("itemType")
             if t not in TEMPLATES:
                 return resp(400, {"error": "Invalid item type"})
             return resp(200, json.loads(json.dumps(TEMPLATES[t])))
+        if path == "/api/items/new":
+            if self.local_templates:
+                return resp(200, json.loads(json.dumps(TEMPLATES[q.get("itemType")])))
+            return resp(404, {"error": "Not found"})
         if path.startswith("/api/local/uploads/") and method == "POST":
             up = path.rsplit("/", 1)[-1]
             if up not in self.uploads:

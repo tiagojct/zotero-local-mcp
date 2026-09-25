@@ -11,7 +11,7 @@ import functools
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .client import ZoteroError
@@ -58,6 +58,7 @@ def safe(fn):
 
 
 class QueueEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     identifier: str = Field(description="DOI, pmid:123 or isbn:978...")
     label: str = Field(default="", description="Short label: first author, year, title")
     reason: str = Field(default="", description="Why it is worth adding (one line)")

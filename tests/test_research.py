@@ -497,12 +497,9 @@ async def test_bench_prepare(lib, fake, ext, settings, tmp_path, monkeypatch):
     out = tmp_path / "bench"
     res = await bench.prepare(lib, ext, out, seed=1, n=6)
     tasks = json.loads((out / "tasks.json").read_text())
-    assert res["tagging_items"] == 6 and res["reviewed_reference"] == 3
-    gold = tasks["tagging"]["gold_reviewed"]
-    assert all(v == ["topic/asthma"] for v in gold.values())  # status and _agent are not scored
-    assert len(tasks["tagging"]["blind_reference_keys"]) == 3
+    assert res["tagging_items"] == 6 and len(tasks["tagging"]["keys"]) == 6
     ref = (out / "reference.md").read_text()
-    assert "Abstract" in ref and "topic/asthma" not in ref  # blind: no current tags
+    assert ref.count("## ") == 6 and "Abstract" in ref and "topic/asthma" not in ref  # blind: no current tags
     assert "AAAA1111" in tasks["facet_fix"]["missing_topic"]
     assert tasks["lit_note"]["key"] == "ITEMQQQ3"
     assert tasks["synthesis"]["topic"] == "topic/asthma" and len(tasks["synthesis"]["keys"]) == 8
@@ -514,3 +511,21 @@ async def test_bench_prepare(lib, fake, ext, settings, tmp_path, monkeypatch):
     # bakeoff_items uses the same sample and hides the current tags
     items = (await Bakeoff(lib).items())["items"]
     assert len(items) == 6 and all("tags" not in i and "automatic_tags" not in i for i in items)
+
+
+async def test_templates_come_from_the_web_api_and_are_saved(librarian, fake, settings):
+    """Zotero 10's local API has no /items/new (found in the model test)."""
+    from zotero_local_mcp.client import LocalZotero
+    await librarian.import_identifiers(["10.1183/13993003.00001-2026"])
+    assert fake.web_template_requests == 1
+    saved = settings.state_dir / "templates" / "journalArticle.json"
+    assert json.loads(saved.read_text())["itemType"] == "journalArticle"
+    again = LocalZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport())
+    assert (await again.template("journalArticle"))["itemType"] == "journalArticle"
+    assert fake.web_template_requests == 1  # from the saved copy
+    fake.local_templates = True
+    third = LocalZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport())
+    assert (await third.template("book"))["itemType"] == "book"
+    assert fake.web_template_requests == 1  # the local API wins when it has templates
+    await again.aclose()
+    await third.aclose()

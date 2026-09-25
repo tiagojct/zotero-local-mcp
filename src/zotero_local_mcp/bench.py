@@ -28,7 +28,6 @@ from .library import Library, label, manual
 from .records import LibraryIndex, item_ids
 from .vocab import facet_of
 
-AGENT_MARK = "_agent"
 
 # Well-known papers; prepare keeps those that resolve and are not in the library.
 NEW_DOIS = [
@@ -62,28 +61,23 @@ async def prepare(lib: Library, ext: External, out: Path, seed: int = 7, n: int 
                      "title": d.get("title", ""), "year": year_of(d), "type": d.get("itemType")})
     (out / "library-index.json").write_text(json.dumps(rows, ensure_ascii=False, indent=0))
 
-    # ---- tagging: reviewed items (no _agent) carry Tiago's tags as the reference
-    def has_topic(i: dict) -> bool:
-        return any(facet_of(t) == "topic" for t in manual(i["data"]))
-
-    reviewed = [i for i in items if has_topic(i) and AGENT_MARK not in manual(i["data"])]
-    agent = [i for i in items if AGENT_MARK in manual(i["data"]) and (i["data"].get("abstractNote") or "").strip()]
-    rng.shuffle(reviewed)
-    rng.shuffle(agent)
-    pick_reviewed = reviewed[: n // 2]
-    pick_agent = agent[: n - len(pick_reviewed)]
-    chosen = sorted(pick_reviewed + pick_agent, key=lambda i: label(i["data"]).lower())
+    # ---- tagging: items with an abstract; the reference is made blind (reference.md
+    # shows no current tags). Items without the review marker are not a reliable
+    # reference: some carry old bulk tags (found in the first model test).
+    pool = [i for i in items if (i["data"].get("abstractNote") or "").strip()]
+    rng.shuffle(pool)
+    chosen = sorted(pool[:n], key=lambda i: label(i["data"]).lower())
     sample = {"created": dt.date.today().isoformat(), "seed": seed, "keys": [i["key"] for i in chosen]}
     bdir = lib.s.state_dir / "bakeoff"
     bdir.mkdir(parents=True, exist_ok=True)
     (bdir / "sample.json").write_text(json.dumps(sample, indent=1))
-    gold = {i["key"]: scored_tags(manual(i["data"])) for i in pick_reviewed}
 
     ref_lines = [
         "Blind reference for the tagging test. Current tags are not shown on purpose.",
-        "For each item, give topic/, method/ and type/ tags from the vocabulary.", "",
+        "For each item, give topic/, method/ and type/ tags from the vocabulary.",
+        "Save the result as reference.json: {\"KEY\": [\"topic/...\", ...]}.", "",
     ]
-    for i in sorted(pick_agent, key=lambda i: label(i["data"]).lower()):
+    for i in chosen:
         d = i["data"]
         ref_lines += [
             f"## {d['key']}",
@@ -160,8 +154,7 @@ async def prepare(lib: Library, ext: External, out: Path, seed: int = 7, n: int 
     tasks = {
         "created": dt.datetime.now().isoformat(timespec="seconds"),
         "seed": seed,
-        "tagging": {"keys": sample["keys"], "gold_reviewed": gold,
-                    "blind_reference_keys": [i["key"] for i in pick_agent]},
+        "tagging": {"keys": sample["keys"]},
         "facet_fix": facet_fix,
         "import": {"in_library": in_library, "new": new},
         "lit_note": lit,
@@ -174,7 +167,6 @@ async def prepare(lib: Library, ext: External, out: Path, seed: int = 7, n: int 
     return {
         "out": str(out),
         "tagging_items": len(sample["keys"]),
-        "reviewed_reference": len(gold),
         "facet_fix": {k: len(v) for k, v in facet_fix.items()},
         "lit_note": lit and lit["citekey"],
         "synthesis_topic": topic,

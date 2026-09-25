@@ -49,6 +49,10 @@ async def test_stdio_roundtrip(fake, tmp_path):
             bad = await s.call_tool("tag_items", {"changes": [{"key": "AAAA1111", "add": ["made-up"]}]})
             assert bad.is_error and "not in the vocabulary" in bad.content[0].text
 
+            # A misnamed field is refused, not silently ignored (seen in the model test)
+            wrong = await s.call_tool("tag_items", {"changes": [{"key": "AAAA1111", "topics": ["topic/asthma"]}]})
+            assert wrong.is_error and "topics" in wrong.content[0].text
+
             undo = payload(await s.call_tool("undo", {"dry_run": False}))
             assert undo["applied"] == 1
             assert {"tag": "topic/spirometry"} not in fake.items["AAAA1111"]["tags"]

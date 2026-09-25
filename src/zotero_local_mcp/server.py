@@ -8,7 +8,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .client import ZoteroError
@@ -57,6 +57,8 @@ def librarian() -> Librarian:
 
 
 class TagChange(BaseModel):
+    # Unknown fields are refused, so a model that writes "topics" instead of "add" gets an error it can fix.
+    model_config = ConfigDict(extra="forbid")
     key: str = Field(description="Zotero item key, e.g. ABCD2345")
     add: list[str] = Field(default_factory=list, description="Vocabulary tags to add")
     remove: list[str] = Field(default_factory=list, description="Tags to remove (any tag)")
@@ -343,8 +345,9 @@ async def attach_oa_pdfs(keys: list[str], dry_run: bool = True) -> dict:
 # ---------------------------------------------------------------- model test
 
 class Proposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     key: str
-    tags: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(min_length=1, description="All proposed tags for this item, e.g. [\"topic/asthma\", \"type/cohort\"]")
 
 
 @mcp.tool(annotations=READ)
