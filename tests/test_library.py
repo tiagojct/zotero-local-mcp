@@ -422,3 +422,84 @@ async def test_tag_audit(lib, fake, tmp_path):
     assert any("3 topic/" in p for p in over["AAAA1111"]) and any("status/" in p for p in over["AAAA1111"])
     assert res["sticky_pairs"][0]["tags"] == ["topic/asthma", "topic/spirometry"]
     assert "AAAA1111" in {r["key"] for r in res["without_review_marker"]["items"]}
+
+
+async def test_apply_tag_review_once_and_changed_since_note(lib, fake, tmp_path):
+    _limits_vocab(lib, tmp_path)
+    fake.items["BBBB2222"]["tags"] = [{"tag": "topic/asthma"}, {"tag": "status/read"}, {"tag": "_agent"}]
+    note = tmp_path / "review.md"
+    note.write_text("| Key | Current tags | Proposed tags |\n|---|---|---|\n"
+                    "| BBBB2222 | topic/asthma | topic/spirometry |\n")
+    fake.touch("BBBB2222", tags=[{"tag": "topic/asthma"}, {"tag": "topic/clinical-decision-support"},
+                                 {"tag": "status/read"}, {"tag": "_agent"}])
+    prev = await lib.apply_tag_review(str(note))
+    ch = prev["changed_since_note"]
+    assert ch["count"] == 1 and ch["items"]["BBBB2222"]["now"] == ["topic/asthma", "topic/clinical-decision-support"]
+    res = await lib.apply_tag_review(str(note), dry_run=False)
+    assert res["applied"] == 1
+    # a second apply is refused; the preview says so; again=True applies
+    with pytest.raises(ZoteroError, match="already applied"):
+        await lib.apply_tag_review(str(note), dry_run=False)
+    prev2 = await lib.apply_tag_review(str(note))
+    assert prev2["already_applied"] and "again=true" in prev2["next"]
+    res2 = await lib.apply_tag_review(str(note), dry_run=False, again=True)
+    assert res2["applied"] == 0
+
+
+async def test_write_tag_review(lib, fake, tmp_path):
+    _limits_vocab(lib, tmp_path)
+    vault = tmp_path / "vault"
+    (vault / "Inbox").mkdir(parents=True)
+    lib.s = type(lib.s)(**{**lib.s.__dict__, "vault": vault})
+    fake.items["BBBB2222"]["tags"] = [{"tag": "Asthma"}, {"tag": "status/read"}, {"tag": "_agent"}]
+    res = await lib.write_tag_review("Zotero tag review 40", [
+        {"key": "BBBB2222", "tags": ["topic/asthma", "type/cohort"], "reason": "a | pipe"},
+        {"key": "AAAA1111", "tags": "topic/spirometry, topic/asthma", "reason": ""},
+    ], intro="Test batch.")
+    assert res["path"] == "Inbox/Zotero tag review 40.md" and res["rows"] == 2
+    text = (vault / res["path"]).read_text()
+    assert "| BBBB2222 |  | Jacinto 2026, Asthma control in primary care | Asthma | topic/asthma, type/cohort | a / pipe |" in text
+    assert "Test batch." in text and "_agent" not in text.split("| Key |")[1]
+    # the note applies as written
+    assert (await lib.apply_tag_review(res["path"]))["rows"] == 2
+    # never overwrites; refuses bad rows and paths outside the vault; writes nothing to Zotero
+    with pytest.raises(ZoteroError, match="already exists"):
+        await lib.write_tag_review("Zotero tag review 40", [{"key": "BBBB2222", "tags": ["topic/asthma"]}])
+    with pytest.raises(ZoteroError) as exc:
+        await lib.write_tag_review("x", [{"key": "BBBB2222", "tags": ["topic/made-up"]},
+                                         {"key": "ZZZZ9999", "tags": ["topic/asthma"]},
+                                         {"key": "AAAA1111", "tags": ["type/cohort"]}])
+    msg = str(exc.value)
+    assert "made-up" in msg and "ZZZZ9999: not in the library" in msg and "AAAA1111: no topic/ tag" in msg
+    assert not (vault / "Inbox" / "x.md").exists()
+    with pytest.raises(ZoteroError, match="outside the vault"):
+        await lib.write_tag_review("../../escape", [{"key": "BBBB2222", "tags": ["topic/asthma"]}])
+    assert fake.write_requests == 0
+
+
+async def test_review_command(lib, fake, tmp_path, capsys):
+    import argparse
+    from zotero_local_mcp import review
+    _limits_vocab(lib, tmp_path)
+    vault = tmp_path / "vault"
+    (vault / "Inbox").mkdir(parents=True)
+    lib.s = type(lib.s)(**{**lib.s.__dict__, "vault": vault})
+    for n, (key, tag) in enumerate([("AAAA1111", "topic/spirometry"), ("BBBB2222", "topic/asthma")], start=9):
+        (vault / "Inbox" / f"Zotero tag review {n}.md").write_text(f"| Key | Proposed tags |\n|---|---|\n| {key} | {tag} |\n")
+    (vault / "Inbox" / "Zotero tag review 10.md").write_text(
+        (vault / "Inbox" / "Zotero tag review 10.md").read_text() + "\nApplied 2026-09-01: 1 items (journal x).\n")
+
+    def ns(cmd, *notes, **kw):
+        return argparse.Namespace(cmd=cmd, notes=list(notes), yes=kw.get("yes", False), again=False,
+                                  keep_marker=False, verbose=False)
+
+    assert await review.run(ns("preview", "Inbox/Zotero tag review *.md"), lib) == 0
+    out = capsys.readouterr().out
+    assert out.index("review 9.md") < out.index("review 10.md") and "already applied" in out
+    assert "1 notes, 1 items would change" in out and fake.write_requests == 0
+    assert await review.run(ns("apply", "Inbox/Zotero tag review *.md", yes=True), lib) == 0
+    out = capsys.readouterr().out
+    assert "Zotero tag review 9.md: applied 1" in out
+    assert "topic/spirometry" in {t["tag"] for t in fake.items["AAAA1111"]["tags"]}
+    assert "topic/asthma" not in {t["tag"] for t in fake.items["BBBB2222"]["tags"]}
+    assert await review.run(ns("preview", "Inbox/nothing*.md"), lib) == 2

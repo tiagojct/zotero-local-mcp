@@ -529,3 +529,28 @@ async def test_templates_come_from_the_web_api_and_are_saved(librarian, fake, se
     assert fake.web_template_requests == 1  # the local API wins when it has templates
     await again.aclose()
     await third.aclose()
+
+
+async def test_duplicates_cut_off_title_and_types(librarian, fake):
+    full = fake.add_item(key="HHHH8888", title="An official ATS clinical practice guideline: interpretation of exhaled nitric oxide",
+                         date="2011-09-01", DOI="10.1164/rccm.9120-11st", abstractNote="FeNO...",
+                         creators=[{"creatorType": "author", "lastName": "Dweik"}], extra="Citation Key: dweik2011a",
+                         dateAdded="2026-05-16T19:20:57Z")
+    stub = fake.add_item(key="JJJJ9999", itemType="document", title="An official ATS clinical practice guideline inter",
+                         date="2011", creators=[{"creatorType": "author", "lastName": "Dweik"}],
+                         extra="Citation Key: dweik2011", dateAdded="2026-05-16T19:21:00Z")
+    # same author and year, different DOIs: two works, not a cut-off title
+    fake.add_item(key="KKKK2222", title="An official ATS clinical practice guideline: interpretation of exhaled nitric oxide levels",
+                  date="2011", DOI="10.1000/other", creators=[{"creatorType": "author", "lastName": "Dweik"}])
+    res = await librarian.duplicates()
+    g = next(g for g in res["duplicates"] if stub in {i["key"] for i in g["items"]})
+    assert {i["key"] for i in g["items"]} >= {full, stub}
+    assert any("cut off" in m for m in g["matched_by"])
+    assert g["fullest_record"] == full and "types_differ" in g and "dweik2011" in g["citekeys"]
+
+
+async def test_audit_flags_one_page_articles(librarian, fake):
+    fake.add_item(key="LLLL3333", title="Introduction to statistics and data analysis", pages="549-549",
+                  publicationTitle="J R Stat Soc A", DOI="10.1093/jrsssa/qnad123", date="2024")
+    res = await librarian.audit(problem="1 or 2 pages (letter, editorial or book review?)")
+    assert [r["key"] for r in res["items"]] == ["LLLL3333"]

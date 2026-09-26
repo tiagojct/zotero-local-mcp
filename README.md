@@ -5,6 +5,7 @@ Two MCP servers for a local Zotero 10 library, plus a weekly alert script:
 - `zotero-local-mcp` (librarian): search and edit the library, faceted tagging with a controlled vocabulary, citekeys, imports by DOI/PMID/ISBN, metadata audit and repair, duplicates, retraction check, open-access PDFs, notes, collections, undo.
 - `zotero-scholar-mcp` (researcher): PubMed and OpenAlex search with "already in library" flags, citation graph, manuscript citation check, CSL JSON bibliographies for Quarto, import queue. It cannot write to Zotero.
 - `zotero-alerts`: runs saved searches from an Obsidian note and writes new works to an Inbox note. No AI model.
+- `zotero-review`: preview or apply several tag review notes from the terminal (`zotero-review apply "Inbox/Zotero tag review *.md"`). Asks before it writes; notes already applied are left out.
 - `zotero-bakeoff`: model test for tagging. `sample` fixes 25 items and writes a reference note for your own tags; `run --model X` runs each model through `opencode run` (tools `bakeoff_items`, `bakeoff_submit`, no library writes); `score` writes precision, recall, edits needed, tokens and cost per model.
 
 The library is reached only through Zotero's local API on `127.0.0.1:23119`: no zotero.org key, changes appear in Zotero at once and sync as normal edits (WebDAV file sync is not affected). Outside metadata comes from Crossref, PubMed (NCBI E-utilities), OpenAlex, Unpaywall and Open Library.
@@ -17,8 +18,8 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 - Every applied write goes to a journal (`~/.local/share/zotero-local-mcp/journal/`). `undo` reverts it, skipping items edited since. Imports and attached PDFs are undone by moving them to the trash.
 - No DELETE requests. Items go to the trash.
 - The researcher's library client refuses every write except creating a new child note (attach_note: a short summary plus an obsidian:// link, journaled, undone by the librarian). Works it proposes go to an import queue note that a person ticks; the librarian imports the ticked lines. Queue labels are sanitised so they cannot create or tick lines.
-- Duplicate detection by title needs the same year and first author, and no conflicting DOI/PMID.
-- Tag limits per facet come from the vocabulary (`max_per_facet: topic=4, type=2`); tag_items skips a change that would go over. `replace` makes the given tags the complete set for those facets. apply_tag_review applies an edited review note exactly and removes the review marker.
+- Duplicate detection by title needs the same year and first author, and no conflicting DOI/PMID. find_duplicates also finds titles cut off during import, shows the evidence for each item, and says when the item types differ (Zotero's Duplicate Items view shows only items of the same type).
+- Tag limits per facet come from the vocabulary (`max_per_facet: topic=4, type=2`); tag_items skips a change that would go over. `replace` makes the given tags the complete set for those facets. write_tag_review writes a review note (a table of proposed tags, checked against the vocabulary, never overwriting a note); apply_tag_review applies the edited note exactly, removes the review marker, lists items whose tags changed after the note was written, and refuses a note that was already applied unless `again=true`.
 
 ## Tools
 
@@ -30,7 +31,7 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 | list_collections, history | create_note, trash_items, undo | check_manuscript |
 | audit_metadata, find_duplicates | import_identifiers, import_queue | export_bibliography |
 | check_retractions, missing_pdfs | repair_metadata, attach_oa_pdfs | queue_imports, attach_note |
-| tag_audit | apply_tag_review | |
+| tag_audit | write_tag_review, apply_tag_review | |
 
 ## Requirements
 

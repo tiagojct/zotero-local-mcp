@@ -260,6 +260,9 @@ class Librarian:
                 out.append("no journal")
             if not (d.get("volume") or d.get("pages")):
                 out.append("no volume or pages")
+            m = re.fullmatch(r"\s*(\d+)\s*[-–]\s*(\d+)\s*", d.get("pages") or "")
+            if m and 0 <= int(m.group(2)) - int(m.group(1)) <= 1:
+                out.append("1 or 2 pages (letter, editorial or book review?)")
         elif t == "book":
             if not ids["isbns"]:
                 out.append("no ISBN")
@@ -402,6 +405,23 @@ class Librarian:
             author = slug(first_creator_name(d))
             if fp and author:
                 buckets[("title, year and first author", f"{fp}|{author}")].append(d["key"])
+        # A title cut off during import: one title is the start of the other, same first
+        # author and year. Zotero's Duplicate Items view does not find these.
+        by_author_year: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
+        for it in items:
+            d = it["data"]
+            t, a, y = slug(d.get("title") or ""), slug(first_creator_name(d)), year_of(d)
+            if len(t) >= 20 and a and y:
+                by_author_year[(a, y)].append((t, d["key"]))
+        doi_of = {it["key"]: item_ids(it["data"])["doi"] for it in items}
+        for group in by_author_year.values():
+            group.sort()
+            for i, (t, k) in enumerate(group):
+                for t2, k2 in group[i + 1:]:
+                    if doi_of[k] and doi_of[k2] and doi_of[k] != doi_of[k2]:
+                        continue  # two DOIs: two works
+                    if t2.startswith(t) and t2 != t:
+                        buckets[("title cut off (same start, first author and year)", f"{k}|{k2}")] += [k, k2]
         for (why, _), keys in buckets.items():
             if len(keys) < 2:
                 continue
@@ -413,20 +433,40 @@ class Librarian:
         for k in parent:
             if reasons.get(k):
                 groups[find(k)].append(k)
-        by_key = {i["key"]: i["data"] for i in items}
+        by_key = {i["key"]: i for i in items}
+
+        def evidence(k: str) -> dict:
+            d = by_key[k]["data"]
+            ids = item_ids(d)
+            return {"key": k, "item": label(d), "type": d.get("itemType"),
+                    "citekey": current_key(d), "added": d.get("dateAdded", "")[:10],
+                    "doi": ids["doi"] or "", "abstract": bool(d.get("abstractNote")),
+                    "children": (by_key[k].get("meta") or {}).get("numChildren"),
+                    "filled_fields": sum(1 for f, v in d.items() if v not in ("", [], {}, None)
+                                         and f not in ("key", "version", "tags", "relations", "collections")),
+                    "tags": manual(d)}
+
         out = []
         for keys in groups.values():
             if len(keys) < 2:
                 continue
-            out.append({
-                "matched_by": sorted(set().union(*(reasons[k] for k in keys))),
-                "items": [{"key": k, "item": label(by_key[k]), "type": by_key[k].get("itemType"),
-                           "citekey": current_key(by_key[k]), "added": by_key[k].get("dateAdded", "")[:10],
-                           "tags": manual(by_key[k])} for k in sorted(keys, key=lambda k: by_key[k].get("dateAdded", ""))],
-            })
+            rows = [evidence(k) for k in sorted(keys, key=lambda k: by_key[k]["data"].get("dateAdded", ""))]
+            fullest = max(rows, key=lambda r: (bool(r["doi"]), r["abstract"], r["children"] or 0, r["filled_fields"]))
+            g = {"matched_by": sorted(set().union(*(reasons[k] for k in keys))), "items": rows,
+                 "fullest_record": fullest["key"]}
+            if len({r["type"] for r in rows}) > 1:
+                g["types_differ"] = ("Zotero's Duplicate Items view shows only items of the same type, so it "
+                                     "does not list this group. To merge: change the item type of the "
+                                     "incomplete item to match, then merge in Duplicate Items.")
+            keys_used = {r["citekey"] for r in rows if r["citekey"]}
+            if len(keys_used) > 1:
+                g["citekeys"] = (f"The items have different citekeys ({', '.join(sorted(keys_used))}). "
+                                 "Check which one your notes and manuscripts cite before merging.")
+            out.append(g)
         return {"groups": len(out), "duplicates": out,
-                "how_to_merge": "In Zotero, open Duplicate Items, select the group and click Merge. "
-                                "Keep the oldest item so its citekey stays."}
+                "how_to_merge": "Merging is done by Tiago in Zotero (Duplicate Items, select the group, Merge). "
+                                "Say what the evidence shows (identifiers, fields, files); do not call "
+                                "items duplicates on a similar title alone."}
 
     # ------------------------------------------------------------ retractions
 

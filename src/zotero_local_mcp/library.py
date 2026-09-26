@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 import markdown as md
 
-from .citekey import base_key, current_key, unique_key, with_key, year_of
+from .citekey import base_key, current_key, first_creator_name, unique_key, with_key, year_of
 from .client import LocalZotero, ZoteroError
 from .config import Settings
 from .journal import Journal
@@ -138,9 +138,41 @@ def parse_review_table(text: str) -> tuple[list[tuple[str, list[str]]], list[str
             continue
         if not raw or raw.lower().startswith(("skip", "-", "keep")):
             continue
-        tags = [t.strip("`'\" ") for t in re.split(r"[,;]\s*|\s+", raw) if t.strip("`'\" ")]
-        rows.append((key, tags))
+        rows.append((key, split_tags(raw)))
     return rows, problems
+
+
+def split_tags(cell: str) -> list[str]:
+    return [t.strip("`'\" ") for t in re.split(r"[,;]\s*|\s+", cell or "") if t.strip("`'\" ")]
+
+
+def review_column(text: str, name: str) -> dict[str, str]:
+    """{key: cell} for another column of a review table (e.g. "Current tags")."""
+    out: dict[str, str] = {}
+    key_col = col = None
+    for line in text.splitlines():
+        s = line.strip()
+        if not s.startswith("|"):
+            key_col = col = None
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        low = [c.lower().strip("* ") for c in cells]
+        if "key" in low and name in low:
+            key_col, col = low.index("key"), low.index(name)
+            continue
+        if key_col is None or re.fullmatch(r"[\s:|-]+", s) or max(key_col, col) >= len(cells):
+            continue
+        key = cells[key_col].strip("` ")
+        if REVIEW_KEY.match(key):
+            out[key] = cells[col]
+    return out
+
+
+APPLIED_LINE = re.compile(r"^Applied (\d{4}-\d{2}-\d{2}): (\d+) items", re.M)
+
+
+def review_cell(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").replace("|", "/")).strip()
 
 
 class Library:
@@ -568,44 +600,156 @@ class Library:
             )
         return await self._run("tag_items", f"tag {len(edits)} items", edits, dry_run)
 
+    def _review_errors(self, key: str, tags: list[str]) -> list[str]:
+        vocab = self.vocab.require()
+        errors = [f"{key}: {e}" for e in self._check_tags(tags)]
+        per = Counter(facet_of(t) for t in tags)
+        errors += [f"{key}: only one '{f}/' tag is allowed" for f in vocab.single_facets if per[f] > 1]
+        errors += [f"{key}: {per[f]} {f}/ tags (at most {m})" for f, m in vocab.max_per_facet.items()
+                   if per[f] > m]
+        return errors
+
     async def apply_tag_review(self, path: str, mark_reviewed: bool = True,
-                               dry_run: bool = True) -> dict:
+                               dry_run: bool = True, again: bool = False) -> dict:
         """Apply a tag review note exactly as Tiago edited it.
 
         The note has a Markdown table with a Key column and a "Proposed tags" column.
         For every row, the listed tags become the item's complete set for each facet
         that is not single-valued (topic, method, type); a listed status/ tag replaces
         the status. Rows with an empty cell, or "skip", are left alone. With
-        mark_reviewed, the review marker is removed (the rows are Tiago's review)."""
+        mark_reviewed, the review marker is removed (the rows are Tiago's review).
+
+        A note that carries an "Applied" line is not applied again unless again=True.
+        If the note has a "Current tags" column, items whose tags changed after the note
+        was written are listed (the note's rows overwrite those changes)."""
         vocab = self.vocab.require()
         note = self._note_path(path)
-        rows, problems = parse_review_table(note.read_text(encoding="utf-8"))
+        text = note.read_text(encoding="utf-8")
+        applied_before = [f"{d} ({n} items)" for d, n in APPLIED_LINE.findall(text)]
+        if applied_before and not again and not dry_run:
+            raise ZoteroError(f"{note.name} was already applied on {', '.join(applied_before)}. "
+                              "Nothing was written. Pass again=true to apply it once more.")
+        rows, problems = parse_review_table(text)
         if not rows:
             raise ZoteroError(f"No rows with a Key and a Proposed tags column in {note}."
                               + (" " + "; ".join(problems) if problems else ""))
         replace = [f for f in vocab.facets if f not in vocab.single_facets]
+        current = review_column(text, "current tags")
+        changed: dict[str, dict] = {}
         errors: list[str] = list(problems)
         edits: dict[str, Editor] = {}
+
+        def watch(key: str, fn: Editor, expected: list[str]) -> Editor:
+            def g(data: dict) -> dict:
+                now = sorted(t for t in manual(data) if facet_of(t) in replace)
+                if expected != now:
+                    changed[key] = {"item": label(data), "in_note": expected, "now": now}
+                return fn(data)
+            return g
+
         for key, tags in rows:
-            errors += [f"{key}: {e}" for e in self._check_tags(tags)]
-            per = Counter(facet_of(t) for t in tags)
-            errors += [f"{key}: only one '{f}/' tag is allowed" for f in vocab.single_facets if per[f] > 1]
-            errors += [f"{key}: {per[f]} {f}/ tags (at most {m})" for f, m in vocab.max_per_facet.items()
-                       if per[f] > m]
+            errors += self._review_errors(key, tags)
             if key in edits:
                 errors.append(f"{key}: listed twice")
-            edits[key] = self._tag_editor(tags, [], vocab.single_facets, mark=False,
-                                          replace=replace, unmark=mark_reviewed)
+            fn = self._tag_editor(tags, [], vocab.single_facets, mark=False,
+                                  replace=replace, unmark=mark_reviewed)
+            if key in current:
+                fn = watch(key, fn, sorted(t for t in split_tags(current[key]) if facet_of(t) in replace))
+            edits[key] = fn
         if errors:
             raise ZoteroError("Nothing was written. Fix these rows in the note first:\n" + "\n".join(errors))
         res = await self._run("apply_tag_review", f"{note.name}: {len(edits)} items", edits, dry_run)
         res["note"] = str(note)
         res["rows"] = len(edits)
+        if applied_before:
+            res["already_applied"] = applied_before
+            if dry_run and not again:
+                res["next"] = (f"{note.name} was already applied ({', '.join(applied_before)}). "
+                               "Apply it again only if Tiago asks, with again=true.")
+        if changed:
+            res["changed_since_note"] = {"count": len(changed), "items": dict(list(changed.items())[:20]),
+                                         "note": "These items' tags changed after the note was written. "
+                                                 "Applying the note overwrites those changes."}
         if not dry_run and res.get("applied"):
             stamp = f"\nApplied {dt.date.today().isoformat()}: {res['applied']} items (journal {res['journal_id']}).\n"
             with note.open("a", encoding="utf-8") as fh:
                 fh.write(stamp)
         return res
+
+    async def write_tag_review(self, path: str, rows: list[dict], intro: str = "",
+                               proposed_by: str = "Sub-Sub librarian") -> dict:
+        """Write a tag review note for Tiago: one row per item with its current tags, the
+        proposed complete set of topic/, method/ and type/ tags, and a reason. Every row is
+        checked against the vocabulary first. The note is new; an existing file is never
+        overwritten. Relative paths are in the vault; a bare name goes to Inbox/."""
+        vocab = self.vocab.require()
+        if self.s.vault is None:
+            raise ZoteroError("write_tag_review needs the vault (ZOTERO_VAULT).")
+        vault = self.s.vault.resolve()
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            p = vault / ("Inbox" if len(p.parts) == 1 else "") / p
+        if p.suffix != ".md":
+            p = p.with_name(p.name + ".md")
+        p = p.resolve()
+        if vault not in p.parents:
+            raise ZoteroError(f"{p} is outside the vault ({vault}).")
+        if p.exists():
+            raise ZoteroError(f"{p.relative_to(vault)} already exists. Choose a new name; notes are never overwritten.")
+        if not rows:
+            raise ZoteroError("No rows.")
+        errors: list[str] = []
+        seen: set[str] = set()
+        clean: list[tuple[str, list[str], str]] = []
+        for r in rows:
+            key = str(r.get("key", "")).strip()
+            tags = r.get("tags") or []
+            tags = split_tags(tags) if isinstance(tags, str) else [str(t).strip() for t in tags if str(t).strip()]
+            if not REVIEW_KEY.match(key):
+                errors.append(f"'{key}' is not a Zotero item key")
+                continue
+            if key in seen:
+                errors.append(f"{key}: listed twice")
+            seen.add(key)
+            if not tags:
+                errors.append(f"{key}: no proposed tags")
+            if not any(facet_of(t) == "topic" for t in tags) and "topic" in vocab.facets:
+                errors.append(f"{key}: no topic/ tag")
+            errors += self._review_errors(key, tags)
+            clean.append((key, tags, str(r.get("reason") or "")))
+        found = {i["key"]: i["data"] for i in await self.z.items_by_keys([k for k, _, _ in clean])}
+        errors += [f"{k}: not in the library" for k, _, _ in clean if k not in found]
+        if errors:
+            raise ZoteroError("Nothing was written. Fix these rows first:\n" + "\n".join(errors))
+        marker = self.s.marker
+        lines = []
+        for key, tags, reason in clean:
+            d = found[key]
+            title = truncate(d.get("title") or "", 90)
+            item = f"{first_creator_name(d)} {year_of(d)}, {title}".strip()
+            cur = [t for t in manual(d) if t != marker and facet_of(t) not in vocab.single_facets]
+            lines.append("| " + " | ".join([key, current_key(d) or "", review_cell(item), review_cell(", ".join(cur)),
+                                              ", ".join(tags), review_cell(reason)]) + " |")
+        name = p.stem
+        text = (
+            f"---\ncreated: {dt.date.today().isoformat()}\nproposed-by: {proposed_by}\n"
+            f"items: {len(clean)}\n---\n\n# {name}\n\n"
+            + (intro.strip() + "\n\n" if intro.strip() else "")
+            + "For each row, Proposed tags becomes the item's complete set of topic/, method/ and type/ "
+              "tags. Status tags and tags without a facet stay.\n\n"
+              "Edit the Proposed tags column. Write skip to leave an item as it is. Then, in Sub-Sub "
+              f"librarian mode: apply the tag review {p.relative_to(vault).as_posix()}. Applying also removes "
+              "the review marker from these items, because this note is your review.\n\n"
+              "| Key | Citekey | Item | Current tags | Proposed tags | Reason |\n|---|---|---|---|---|---|\n"
+            + "\n".join(lines) + "\n"
+        )
+        parsed, problems = parse_review_table(text)
+        if problems or [k for k, _ in parsed] != [k for k, _, _ in clean]:
+            raise ZoteroError("The note would not read back correctly: " + "; ".join(problems))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return {"path": p.relative_to(vault).as_posix(), "rows": len(clean),
+                "next": "Ask Tiago to review the note. Apply it with apply_tag_review only when he says so."}
 
     def _note_path(self, path: str) -> Path:
         p = Path(path).expanduser()

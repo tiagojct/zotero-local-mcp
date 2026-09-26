@@ -193,13 +193,37 @@ async def tag_items(changes: list[TagChange], dry_run: bool = True) -> dict:
 
 @mcp.tool(annotations=WRITE)
 @safe
-async def apply_tag_review(path: str, mark_reviewed: bool = True, dry_run: bool = True) -> dict:
+async def apply_tag_review(path: str, mark_reviewed: bool = True, dry_run: bool = True,
+                           again: bool = False) -> dict:
     """Apply a tag review note (path in the vault, e.g. "Inbox/Zotero tag review 13.md") exactly
     as Tiago edited it: for each table row, the Proposed tags become the item's complete topic/,
     method/ and type/ tags; a status/ tag in the row replaces the status. Rows left empty or
     marked "skip" are not changed. mark_reviewed removes the review marker. Use this instead of
-    copying rows into tag_items."""
-    return await lib().apply_tag_review(path, mark_reviewed, dry_run)
+    copying rows into tag_items. A note that was already applied (it has an "Applied" line) is
+    refused unless again=true. The preview lists items whose tags changed after the note was
+    written (changed_since_note): tell Tiago, because applying overwrites those changes."""
+    return await lib().apply_tag_review(path, mark_reviewed, dry_run, again)
+
+
+class ReviewRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(description="Zotero item key, e.g. ABCD2345")
+    tags: list[str] = Field(min_length=1, description=(
+        "The complete proposed set of topic/, method/ and type/ tags for the item (vocabulary tags only)"))
+    reason: str = Field(default="", description="Short reason, e.g. what changed and why (a few words)")
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+@safe
+async def write_tag_review(path: str, rows: list[ReviewRow], intro: str = "") -> dict:
+    """Write a tag review note for Tiago to check (a new Markdown note in the vault; a bare name
+    goes to Inbox/, e.g. "Zotero tag review 32"). Each row gets the item's citekey, author, year,
+    title and current tags, your proposed tags and reason. Every row is checked against the
+    vocabulary and the per-facet limits before anything is written, and an existing note is never
+    overwritten. Nothing changes in Zotero: Tiago edits the note, then apply_tag_review applies it.
+    Use this for re-tagging proposals instead of writing the table by hand. intro: one or two
+    sentences on why these items are in the note."""
+    return await lib().write_tag_review(path, [r.model_dump() for r in rows], intro)
 
 
 @mcp.tool(annotations=READ)
@@ -336,8 +360,11 @@ async def repair_metadata(keys: list[str], overwrite: bool = False, min_confiden
 @mcp.tool(annotations=READ)
 @safe
 async def find_duplicates() -> dict:
-    """Groups of likely duplicate items (same DOI, PMID, ISBN, or title and year).
-    Merging is done by the user in Zotero's Duplicate Items view."""
+    """Groups of likely duplicate items: same DOI, PMID or ISBN; same title, year and first
+    author; or a title cut off during import (one title is the start of the other). Each item
+    comes with evidence (type, DOI, abstract, child items, filled fields, citekey), the fullest
+    record, and notes when the item types differ (Zotero's own Duplicate Items view misses
+    those) or the citekeys differ. Merging is done by Tiago in Zotero."""
     return await librarian().duplicates()
 
 
