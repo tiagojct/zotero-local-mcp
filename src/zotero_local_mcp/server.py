@@ -62,6 +62,9 @@ class TagChange(BaseModel):
     key: str = Field(description="Zotero item key, e.g. ABCD2345")
     add: list[str] = Field(default_factory=list, description="Vocabulary tags to add")
     remove: list[str] = Field(default_factory=list, description="Tags to remove (any tag)")
+    replace: list[str] = Field(default_factory=list, description=(
+        "Facets to replace, e.g. [\"topic\", \"method\", \"type\"]: the item's existing tags in these "
+        "facets are removed unless they are in add. Use it when re-tagging an item."))
 
 
 def safe(fn):
@@ -181,9 +184,31 @@ async def history(limit: int = 10) -> list[dict]:
 @safe
 async def tag_items(changes: list[TagChange], dry_run: bool = True) -> dict:
     """Add and remove tags on items. Added tags must be in the vocabulary. For single-value
-    facets (e.g. status/) the new tag replaces the old one. Items that gain tags also get the
-    review marker. dry_run=true (default) returns a preview and writes nothing."""
+    facets (e.g. status/) the new tag replaces the old one. With replace, the item's other
+    tags in those facets are removed. A change that would put more tags in a facet than the
+    vocabulary allows (max_per_facet) is skipped with a reason. Items that gain tags also get
+    the review marker. dry_run=true (default) returns a preview and writes nothing."""
     return await lib().tag_items([c.model_dump() for c in changes], dry_run)
+
+
+@mcp.tool(annotations=WRITE)
+@safe
+async def apply_tag_review(path: str, mark_reviewed: bool = True, dry_run: bool = True) -> dict:
+    """Apply a tag review note (path in the vault, e.g. "Inbox/Zotero tag review 13.md") exactly
+    as Tiago edited it: for each table row, the Proposed tags become the item's complete topic/,
+    method/ and type/ tags; a status/ tag in the row replaces the status. Rows left empty or
+    marked "skip" are not changed. mark_reviewed removes the review marker. Use this instead of
+    copying rows into tag_items."""
+    return await lib().apply_tag_review(path, mark_reviewed, dry_run)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def tag_audit(limit: int = 50) -> dict:
+    """Items whose tags break the vocabulary limits (too many topic/ or type/ tags, more than one
+    status/), pairs of tags that almost always appear together (a sign of batch tagging), and
+    items without the review marker."""
+    return await lib().tag_audit(limit)
 
 
 @mcp.tool(annotations=WRITE)

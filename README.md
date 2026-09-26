@@ -18,6 +18,7 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 - No DELETE requests. Items go to the trash.
 - The researcher's library client refuses every write except creating a new child note (attach_note: a short summary plus an obsidian:// link, journaled, undone by the librarian). Works it proposes go to an import queue note that a person ticks; the librarian imports the ticked lines. Queue labels are sanitised so they cannot create or tick lines.
 - Duplicate detection by title needs the same year and first author, and no conflicting DOI/PMID.
+- Tag limits per facet come from the vocabulary (`max_per_facet: topic=4, type=2`); tag_items skips a change that would go over. `replace` makes the given tags the complete set for those facets. apply_tag_review applies an edited review note exactly and removes the review marker.
 
 ## Tools
 
@@ -29,6 +30,7 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 | list_collections, history | create_note, trash_items, undo | check_manuscript |
 | audit_metadata, find_duplicates | import_identifiers, import_queue | export_bibliography |
 | check_retractions, missing_pdfs | repair_metadata, attach_oa_pdfs | queue_imports, attach_note |
+| tag_audit | apply_tag_review | |
 
 ## Requirements
 

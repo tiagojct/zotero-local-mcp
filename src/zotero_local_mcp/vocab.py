@@ -4,7 +4,8 @@ Format (see examples/zotero-tags.md):
 
     ---
     required_facets: topic, status
-    single_facets: status, type
+    single_facets: status
+    max_per_facet: topic=4, type=2
     ---
     ## topic
     - `topic/spirometry` Lung function testing by spirometry. aliases: pft, lung function
@@ -31,6 +32,16 @@ def facet_of(tag: str) -> str | None:
     return tag.split("/", 1)[0] if "/" in tag else None
 
 
+def _limits(value: str) -> dict[str, int]:
+    """'topic=4, type=2' (or 'topic: 4') -> {'topic': 4, 'type': 2}."""
+    out: dict[str, int] = {}
+    for part in _split_list(value):
+        m = re.match(r"^([a-z_-]+)\s*[=:]\s*(\d+)$", part)
+        if m:
+            out[m.group(1)] = int(m.group(2))
+    return out
+
+
 def _split_list(value: str) -> list[str]:
     value = value.strip().strip("[]")
     return [v.strip().strip("'\"") for v in value.split(",") if v.strip()]
@@ -51,6 +62,7 @@ class Vocabulary:
     single_facets: list[str]
     problems: list[str]
     mtime: float = 0.0
+    max_per_facet: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> "Vocabulary":
@@ -101,6 +113,7 @@ class Vocabulary:
             single_facets=_split_list(front.get("single_facets", "")),
             problems=problems,
             mtime=path.stat().st_mtime,
+            max_per_facet=_limits(front.get("max_per_facet", "")),
         )
         return vocab
 
@@ -134,6 +147,7 @@ class Vocabulary:
             "path": str(self.path),
             "required_facets": self.required_facets,
             "single_facets": self.single_facets,
+            "max_per_facet": self.max_per_facet,
             "tag_count": len(self.entries),
             "facets": grouped,
             "problems": self.problems,

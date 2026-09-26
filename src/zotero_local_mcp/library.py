@@ -13,9 +13,12 @@ Tag operations cover top-level regular items (not notes, attachments or annotati
 
 from __future__ import annotations
 
+import datetime as dt
+
 import html
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any, Callable
 
 import markdown as md
@@ -100,6 +103,45 @@ def html_to_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------- library
+
+
+REVIEW_KEY = re.compile(r"^[A-Z0-9]{8}$")
+
+
+def parse_review_table(text: str) -> tuple[list[tuple[str, list[str]]], list[str]]:
+    """Rows (key, tags) from Markdown tables that have a Key column and a
+    "Proposed tags" (or "Tags") column. Cells may use commas, semicolons,
+    spaces or backticks. Empty cells and "skip" rows are ignored."""
+    rows: list[tuple[str, list[str]]] = []
+    problems: list[str] = []
+    key_col = tag_col = None
+    for n, line in enumerate(text.splitlines(), start=1):
+        s = line.strip()
+        if not s.startswith("|"):
+            key_col = tag_col = None
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        low = [c.lower().strip("* ") for c in cells]
+        if "key" in low and any(c in ("proposed tags", "tags", "proposed") for c in low):
+            key_col = low.index("key")
+            tag_col = next(i for i, c in enumerate(low) if c in ("proposed tags", "tags", "proposed"))
+            continue
+        if key_col is None or re.fullmatch(r"[\s:|-]+", s):
+            continue
+        if max(key_col, tag_col) >= len(cells):
+            problems.append(f"line {n}: too few cells")
+            continue
+        key = cells[key_col].strip("` ")
+        raw = cells[tag_col]
+        if not REVIEW_KEY.match(key):
+            problems.append(f"line {n}: '{key}' is not a Zotero item key")
+            continue
+        if not raw or raw.lower().startswith(("skip", "-", "keep")):
+            continue
+        tags = [t.strip("`'\" ") for t in re.split(r"[,;]\s*|\s+", raw) if t.strip("`'\" ")]
+        rows.append((key, tags))
+    return rows, problems
+
 
 class Library:
     def __init__(self, settings: Settings, client: LocalZotero | None = None) -> None:
@@ -450,8 +492,13 @@ class Library:
     # ------------------------------------------------------------ tags
 
     def _tag_editor(self, add: list[str], remove: list[str], single: list[str],
-                    mark: bool) -> Editor:
+                    mark: bool, replace: list[str] | None = None,
+                    limits: dict[str, int] | None = None, unmark: bool = False) -> Editor:
+        """add/remove tags. replace: facets whose manual tags become exactly the added ones.
+        limits: most manual tags per facet; a change that would go over is skipped.
+        unmark: remove the review marker (the change is Tiago's own review)."""
         marker = self.s.marker
+        replace_set = set(replace or [])
 
         def fn(data: dict) -> dict:
             tags = [dict(t) for t in data.get("tags") or []]
@@ -461,10 +508,12 @@ class Library:
                 t for t in tags
                 if t["tag"] not in remove
                 and not (ttype(t) == 0 and facet_of(t["tag"]) in new_single and t["tag"] not in add)
+                and not (ttype(t) == 0 and facet_of(t["tag"]) in replace_set and t["tag"] not in add)
+                and not (unmark and marker and t["tag"] == marker)
             ]
             names = {t["tag"] for t in kept if ttype(t) == 0}
             new_adds = [t for t in add if t not in before_manual]
-            extra = [marker] if (mark and marker and new_adds) else []
+            extra = [marker] if (mark and not unmark and marker and new_adds) else []
             for t in [*add, *extra]:
                 if t in names:
                     continue
@@ -474,6 +523,12 @@ class Library:
                 else:
                     kept.append({"tag": t})
                 names.add(t)
+            for facet, most in (limits or {}).items():
+                after = [t["tag"] for t in kept if ttype(t) == 0 and facet_of(t["tag"]) == facet]
+                before = [t for t in before_manual if facet_of(t) == facet]
+                if len(after) > most and len(after) > len(before):
+                    raise Skip(f"would have {len(after)} {facet}/ tags (at most {most}): "
+                               f"{', '.join(sorted(after))}. Remove some, or use replace.")
             return {"tags": kept}
 
         return fn
@@ -497,18 +552,119 @@ class Library:
             key = ch["key"]
             add = [t.strip() for t in ch.get("add") or [] if t.strip()]
             remove = [t.strip() for t in ch.get("remove") or [] if t.strip()]
+            replace = [f.strip().rstrip("/") for f in ch.get("replace") or [] if f.strip()]
             errors += [f"{key}: {e}" for e in self._check_tags(add)]
+            errors += [f"{key}: replace names an unknown facet '{f}'" for f in replace if f not in vocab.facets]
             per_facet = Counter(facet_of(t) for t in add if facet_of(t) in vocab.single_facets)
             errors += [f"{key}: only one '{f}/' tag is allowed" for f, n in per_facet.items() if n > 1]
             if key in edits:
                 errors.append(f"{key}: listed twice")
-            edits[key] = self._tag_editor(add, remove, vocab.single_facets, mark=True)
+            edits[key] = self._tag_editor(add, remove, vocab.single_facets, mark=True,
+                                          replace=replace, limits=vocab.max_per_facet)
         if errors:
             raise ZoteroError(
                 "Nothing was written. Fix these first (add missing tags to the vocabulary file "
                 "only with the user's approval):\n" + "\n".join(errors)
             )
         return await self._run("tag_items", f"tag {len(edits)} items", edits, dry_run)
+
+    async def apply_tag_review(self, path: str, mark_reviewed: bool = True,
+                               dry_run: bool = True) -> dict:
+        """Apply a tag review note exactly as Tiago edited it.
+
+        The note has a Markdown table with a Key column and a "Proposed tags" column.
+        For every row, the listed tags become the item's complete set for each facet
+        that is not single-valued (topic, method, type); a listed status/ tag replaces
+        the status. Rows with an empty cell, or "skip", are left alone. With
+        mark_reviewed, the review marker is removed (the rows are Tiago's review)."""
+        vocab = self.vocab.require()
+        note = self._note_path(path)
+        rows, problems = parse_review_table(note.read_text(encoding="utf-8"))
+        if not rows:
+            raise ZoteroError(f"No rows with a Key and a Proposed tags column in {note}."
+                              + (" " + "; ".join(problems) if problems else ""))
+        replace = [f for f in vocab.facets if f not in vocab.single_facets]
+        errors: list[str] = list(problems)
+        edits: dict[str, Editor] = {}
+        for key, tags in rows:
+            errors += [f"{key}: {e}" for e in self._check_tags(tags)]
+            per = Counter(facet_of(t) for t in tags)
+            errors += [f"{key}: only one '{f}/' tag is allowed" for f in vocab.single_facets if per[f] > 1]
+            errors += [f"{key}: {per[f]} {f}/ tags (at most {m})" for f, m in vocab.max_per_facet.items()
+                       if per[f] > m]
+            if key in edits:
+                errors.append(f"{key}: listed twice")
+            edits[key] = self._tag_editor(tags, [], vocab.single_facets, mark=False,
+                                          replace=replace, unmark=mark_reviewed)
+        if errors:
+            raise ZoteroError("Nothing was written. Fix these rows in the note first:\n" + "\n".join(errors))
+        res = await self._run("apply_tag_review", f"{note.name}: {len(edits)} items", edits, dry_run)
+        res["note"] = str(note)
+        res["rows"] = len(edits)
+        if not dry_run and res.get("applied"):
+            stamp = f"\nApplied {dt.date.today().isoformat()}: {res['applied']} items (journal {res['journal_id']}).\n"
+            with note.open("a", encoding="utf-8") as fh:
+                fh.write(stamp)
+        return res
+
+    def _note_path(self, path: str) -> Path:
+        p = Path(path).expanduser()
+        if not p.is_absolute() and self.s.vault is not None:
+            p = self.s.vault / p
+        if p.suffix != ".md":
+            p = p.with_suffix(p.suffix + ".md") if p.suffix else p.with_suffix(".md")
+        if not p.exists():
+            raise ZoteroError(f"No note at {p}.")
+        return p
+
+    async def tag_audit(self, limit: int = 50) -> dict:
+        """Items whose tags break the vocabulary rules or look batch-applied."""
+        vocab = self.vocab.require()
+        items = await self.regular_items()
+        by_key = {i["key"]: i for i in items}
+        tagsets = {i["key"]: set(manual(i["data"])) for i in items}
+        over: dict[str, list[str]] = {}
+        for k, tags in tagsets.items():
+            for f, most in vocab.max_per_facet.items():
+                n = sum(1 for t in tags if facet_of(t) == f)
+                if n > most:
+                    over.setdefault(k, []).append(f"{n} {f}/ tags (at most {most})")
+            for f in vocab.single_facets:
+                n = sum(1 for t in tags if facet_of(t) == f)
+                if n > 1:
+                    over.setdefault(k, []).append(f"{n} {f}/ tags (only one allowed)")
+        # Pairs of tags that almost always come together: a sign of tags applied in batches.
+        count = Counter(t for tags in tagsets.values() for t in tags if vocab.allows(t) and not t.startswith("_"))
+        pair_count: Counter = Counter()
+        for tags in tagsets.values():
+            scored = sorted(t for t in tags if t in count and facet_of(t) not in vocab.single_facets)
+            for a_i, a in enumerate(scored):
+                for b in scored[a_i + 1:]:
+                    pair_count[(a, b)] += 1
+        sticky = []
+        for (a, b), n in pair_count.items():
+            union = count[a] + count[b] - n
+            if n >= 10 and union and n / union >= 0.8:
+                sticky.append({"tags": [a, b], "together": n, "jaccard": round(n / union, 2)})
+        sticky.sort(key=lambda x: -x["together"])
+        marker = self.s.marker
+        unmarked = [k for k, tags in tagsets.items()
+                    if tags and marker not in tags and any(facet_of(t) not in vocab.single_facets
+                                                           for t in tags if facet_of(t))]
+
+        def rows(keys: list[str]) -> list[dict]:
+            return [{"key": k, "item": label(by_key[k]["data"]),
+                     "tags": sorted(t for t in tagsets[k] if not t.startswith("_"))} for k in keys[:limit]]
+
+        return {
+            "items": len(items),
+            "over_limit": {"count": len(over), "items": [r | {"problems": over[r["key"]]} for r in rows(sorted(over))]},
+            "sticky_pairs": sticky[:20],
+            "without_review_marker": {"count": len(unmarked), "items": rows(sorted(unmarked))},
+            "note": "Sticky pairs appear together on at least 80% of their items: check whether "
+                    "they were applied in batches. Items without the review marker were not "
+                    "proposed by an agent (reviewed by Tiago, or tags from before the vocabulary).",
+        }
 
     async def rename_tags(self, mapping: dict[str, str], dry_run: bool = True) -> dict:
         errors = self._check_tags(sorted(set(mapping.values())))

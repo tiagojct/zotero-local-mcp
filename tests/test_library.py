@@ -342,3 +342,83 @@ async def test_find_by_several_tags(lib):
     assert (await lib.find(tags=["Asthma", "status/read"]))["total"] == 1
     assert (await lib.find(tags=["Asthma", "status/to-read"]))["total"] == 0
     assert (await lib.find(tags=["Spirometry"]))["items"][0]["key"] == "AAAA1111"  # automatic tag
+
+
+# ---------------------------------------------------------------- re-tagging (after the model test)
+
+def _limits_vocab(lib, tmp_path):
+    from conftest import VOCAB
+    v = tmp_path / "limits.md"
+    v.write_text(VOCAB.replace("single_facets: status, type", "single_facets: status\nmax_per_facet: topic=2, type: 1"))
+    lib.vocab = type(lib.vocab)(v)
+    return lib.vocab.require()
+
+
+async def test_limits_and_replace(lib, fake, tmp_path):
+    vocab = _limits_vocab(lib, tmp_path)
+    assert vocab.max_per_facet == {"topic": 2, "type": 1}
+    await lib.tag_items([{"key": "AAAA1111", "add": ["topic/spirometry", "topic/asthma"]}], dry_run=False)
+    # a third topic is refused for that item, with a reason
+    res = await lib.tag_items([{"key": "AAAA1111", "add": ["topic/clinical-decision-support"]}], dry_run=True)
+    assert res["would_change"] == 0 and "at most 2" in res["skipped"]["AAAA1111"]
+    # with replace, the topic tags become exactly the added ones
+    res = await lib.tag_items([{"key": "AAAA1111", "add": ["topic/clinical-decision-support"],
+                                "replace": ["topic"]}], dry_run=False)
+    tags = {t["tag"] for t in fake.items["AAAA1111"]["tags"]}
+    assert "topic/clinical-decision-support" in tags and "topic/spirometry" not in tags and "topic/asthma" not in tags
+    with pytest.raises(ZoteroError, match="unknown facet"):
+        await lib.tag_items([{"key": "AAAA1111", "add": [], "replace": ["topics"]}])
+
+
+async def test_apply_tag_review(lib, fake, tmp_path):
+    _limits_vocab(lib, tmp_path)
+    fake.items["BBBB2222"]["tags"] = [{"tag": "topic/asthma"}, {"tag": "topic/spirometry"},
+                                      {"tag": "status/read"}, {"tag": "_agent"}, {"tag": "Asthma", "type": 1}]
+    note = tmp_path / "Zotero tag review 13.md"
+    note.write_text(
+        "---\nbatch: 13\n---\n\n| Key | Citekey | Item | Current tags | Proposed tags | Reason |\n"
+        "|---|---|---|---|---|---|\n"
+        "| BBBB2222 | x2026 | Asthma control | topic/asthma, topic/spirometry | `topic/clinical-decision-support`, type/cohort | |\n"
+        "| AAAA1111 | y2026 | Spirometry | | skip | not sure |\n"
+        "| CCCC3333 | west1974 | Book | | topic/spirometry; status/to-read | |\n")
+    prev = await lib.apply_tag_review(str(note))
+    assert prev["dry_run"] and prev["rows"] == 2 and prev["would_change"] == 2
+    res = await lib.apply_tag_review(str(note), dry_run=False)
+    assert res["applied"] == 2 and res["journal_id"]
+    b = {(t["tag"], t.get("type", 0)) for t in fake.items["BBBB2222"]["tags"]}
+    # topic and type replaced, status kept, marker removed, automatic tag untouched
+    assert b == {("topic/clinical-decision-support", 0), ("type/cohort", 0), ("status/read", 0), ("Asthma", 1)}
+    c = {t["tag"] for t in fake.items["CCCC3333"]["tags"]}
+    assert c == {"topic/spirometry", "status/to-read"}
+    assert "Applied" in note.read_text() and res["journal_id"] in note.read_text()
+    # undo restores the earlier tags, including the marker
+    await lib.undo(res["journal_id"], dry_run=False)
+    assert {"topic/spirometry", "_agent"} <= {t["tag"] for t in fake.items["BBBB2222"]["tags"]}
+
+
+async def test_apply_tag_review_refuses_bad_rows(lib, fake, tmp_path):
+    _limits_vocab(lib, tmp_path)
+    note = tmp_path / "bad.md"
+    note.write_text("| Key | Proposed tags |\n|---|---|\n"
+                    "| BBBB2222 | topic/asthma, topic/spirometry, topic/clinical-decision-support |\n"
+                    "| AAAA1111 | topic/made-up |\n| nokey | topic/asthma |\n")
+    with pytest.raises(ZoteroError) as exc:
+        await lib.apply_tag_review(str(note))
+    msg = str(exc.value)
+    assert "3 topic/ tags (at most 2)" in msg and "made-up" in msg and "not a Zotero item key" in msg
+    assert fake.write_requests == 0
+
+
+async def test_tag_audit(lib, fake, tmp_path):
+    _limits_vocab(lib, tmp_path)
+    for n in range(12):
+        fake.add_item(key=f"PAIR{n:04d}".replace("0", "Q"), title=f"Paper {n}",
+                      tags=[{"tag": "topic/spirometry"}, {"tag": "topic/asthma"}, {"tag": "_agent"}])
+    fake.items["AAAA1111"]["tags"] = [{"tag": "topic/spirometry"}, {"tag": "topic/asthma"},
+                                      {"tag": "topic/clinical-decision-support"}, {"tag": "status/read"},
+                                      {"tag": "status/to-read"}]
+    res = await lib.tag_audit()
+    over = {r["key"]: r["problems"] for r in res["over_limit"]["items"]}
+    assert any("3 topic/" in p for p in over["AAAA1111"]) and any("status/" in p for p in over["AAAA1111"])
+    assert res["sticky_pairs"][0]["tags"] == ["topic/asthma", "topic/spirometry"]
+    assert "AAAA1111" in {r["key"] for r in res["without_review_marker"]["items"]}
