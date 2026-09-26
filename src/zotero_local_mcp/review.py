@@ -3,8 +3,8 @@
     zotero-review preview NOTE...        what each note would change (writes nothing)
     zotero-review apply NOTE... [--yes]  apply the notes, one after the other
 
-NOTE is a path in the vault ("Inbox/Zotero tag review 13.md") or a pattern in
-quotes ("Inbox/Zotero tag review *.md"). Notes that were already applied (they
+NOTE is a number or a range of review note numbers (13, 13-31: "Inbox/Zotero
+tag review NN.md"), a path in the vault, or a pattern in quotes ("Inbox/*.md"). Notes that were already applied (they
 have an "Applied" line) are left out unless --again is given. apply shows the
 preview first and asks before it writes, unless --yes. Every write is journaled:
 undo it in Sub-Sub (librarian mode: history, then undo).
@@ -27,6 +27,9 @@ from .config import Settings
 from .library import Library
 
 
+RANGE = re.compile(r"^(\d+)(?:-(\d+))?$")
+
+
 def natural(p: Path) -> list:
     return [int(x) if x.isdigit() else x.lower() for x in re.split(r"(\d+)", p.name)]
 
@@ -35,6 +38,17 @@ def expand(args: list[str], vault: Path | None) -> tuple[list[Path], list[str]]:
     notes: list[Path] = []
     missing: list[str] = []
     for a in args:
+        m = RANGE.match(a)
+        if m and vault is not None:
+            lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+            for n in range(lo, hi + 1):
+                cands = [vault / "Inbox" / f"Zotero tag review {x}.md" for x in dict.fromkeys((f"{n:02d}", str(n)))]
+                hit = next((c for c in cands if c.exists()), None)
+                if hit:
+                    notes.append(hit)
+                else:
+                    missing.append(cands[0].name)
+            continue
         p = Path(a).expanduser()
         if not p.is_absolute() and vault is not None and not p.exists():
             p = vault / p
@@ -84,6 +98,8 @@ async def run(args: argparse.Namespace, lib: Library | None = None) -> int:
                 print(f"{p.name}: already applied ({', '.join(res['already_applied'])}); left out")
                 continue
             print(summary_line(p.name, res))
+            if not res.get("checks_changes"):
+                print("  no Current tags column: changes made in Zotero after the note are not detected")
             for k, why in (res.get("skipped") or {}).items():
                 print(f"  skipped {k}: {why}")
             for k, ch in ((res.get("changed_since_note") or {}).get("items") or {}).items():

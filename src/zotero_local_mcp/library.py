@@ -661,6 +661,7 @@ class Library:
         res = await self._run("apply_tag_review", f"{note.name}: {len(edits)} items", edits, dry_run)
         res["note"] = str(note)
         res["rows"] = len(edits)
+        res["checks_changes"] = bool(current)
         if applied_before:
             res["already_applied"] = applied_before
             if dry_run and not again:

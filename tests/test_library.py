@@ -497,9 +497,15 @@ async def test_review_command(lib, fake, tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.index("review 9.md") < out.index("review 10.md") and "already applied" in out
     assert "1 notes, 1 items would change" in out and fake.write_requests == 0
+    assert "no Current tags column" in out
     assert await review.run(ns("apply", "Inbox/Zotero tag review *.md", yes=True), lib) == 0
     out = capsys.readouterr().out
     assert "Zotero tag review 9.md: applied 1" in out
     assert "topic/spirometry" in {t["tag"] for t in fake.items["AAAA1111"]["tags"]}
     assert "topic/asthma" not in {t["tag"] for t in fake.items["BBBB2222"]["tags"]}
     assert await review.run(ns("preview", "Inbox/nothing*.md"), lib) == 2
+    capsys.readouterr()
+    # a range of note numbers; missing numbers are reported
+    assert await review.run(ns("preview", "9-11"), lib) == 0
+    out = capsys.readouterr().out
+    assert "No note matches: Zotero tag review 11.md" in out and "review 9.md: already applied" in out
