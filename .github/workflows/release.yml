@@ -1,0 +1,17 @@
+# Publishes to PyPI when a tag like v0.4.0 is pushed. Needs a trusted publisher on
+# PyPI: owner tiagojct, repository zotero-local-mcp, workflow release.yml, environment pypi.
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - run: uv publish --trusted-publishing always
