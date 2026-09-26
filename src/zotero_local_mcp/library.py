@@ -237,6 +237,8 @@ class Library:
         )
         out["review_marker"] = self.s.marker or None
         out["state_dir"] = str(self.s.state_dir)
+        out["vault"] = str(self.s.vault) if self.s.vault else None
+        out["contact_email_set"] = bool(self.s.email)
         return out
 
     async def overview(self) -> dict:
@@ -528,7 +530,7 @@ class Library:
                     limits: dict[str, int] | None = None, unmark: bool = False) -> Editor:
         """add/remove tags. replace: facets whose manual tags become exactly the added ones.
         limits: most manual tags per facet; a change that would go over is skipped.
-        unmark: remove the review marker (the change is Tiago's own review)."""
+        unmark: remove the review marker (the change is the user's own review)."""
         marker = self.s.marker
         replace_set = set(replace or [])
 
@@ -611,13 +613,13 @@ class Library:
 
     async def apply_tag_review(self, path: str, mark_reviewed: bool = True,
                                dry_run: bool = True, again: bool = False) -> dict:
-        """Apply a tag review note exactly as Tiago edited it.
+        """Apply a tag review note exactly as the user edited it.
 
         The note has a Markdown table with a Key column and a "Proposed tags" column.
         For every row, the listed tags become the item's complete set for each facet
         that is not single-valued (topic, method, type); a listed status/ tag replaces
         the status. Rows with an empty cell, or "skip", are left alone. With
-        mark_reviewed, the review marker is removed (the rows are Tiago's review).
+        mark_reviewed, the review marker is removed (the rows are the user's review).
 
         A note that carries an "Applied" line is not applied again unless again=True.
         If the note has a "Current tags" column, items whose tags changed after the note
@@ -666,7 +668,7 @@ class Library:
             res["already_applied"] = applied_before
             if dry_run and not again:
                 res["next"] = (f"{note.name} was already applied ({', '.join(applied_before)}). "
-                               "Apply it again only if Tiago asks, with again=true.")
+                               "Apply it again only if the user asks, with again=true.")
         if changed:
             res["changed_since_note"] = {"count": len(changed), "items": dict(list(changed.items())[:20]),
                                          "note": "These items' tags changed after the note was written. "
@@ -679,7 +681,7 @@ class Library:
 
     async def write_tag_review(self, path: str, rows: list[dict], intro: str = "",
                                proposed_by: str = "Sub-Sub librarian") -> dict:
-        """Write a tag review note for Tiago: one row per item with its current tags, the
+        """Write a tag review note for the user: one row per item with its current tags, the
         proposed complete set of topic/, method/ and type/ tags, and a reason. Every row is
         checked against the vocabulary first. The note is new; an existing file is never
         overwritten. Relative paths are in the vault; a bare name goes to Inbox/."""
@@ -750,7 +752,7 @@ class Library:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
         return {"path": p.relative_to(vault).as_posix(), "rows": len(clean),
-                "next": "Ask Tiago to review the note. Apply it with apply_tag_review only when he says so."}
+                "next": "Ask the user to review the note. Apply it with apply_tag_review only when they say so."}
 
     def _note_path(self, path: str) -> Path:
         p = Path(path).expanduser()
@@ -808,7 +810,7 @@ class Library:
             "without_review_marker": {"count": len(unmarked), "items": rows(sorted(unmarked))},
             "note": "Sticky pairs appear together on at least 80% of their items: check whether "
                     "they were applied in batches. Items without the review marker were not "
-                    "proposed by an agent (reviewed by Tiago, or tags from before the vocabulary).",
+                    "proposed by an agent (reviewed by the user, or tags from before the vocabulary).",
         }
 
     async def rename_tags(self, mapping: dict[str, str], dry_run: bool = True) -> dict:

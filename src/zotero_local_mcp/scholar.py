@@ -3,7 +3,7 @@ checks, bibliography export and the import queue.
 
 The researcher never writes to Zotero. Its library client refuses writes, so
 text read from outside sources cannot lead to library changes. Additions go
-to the import queue note, which Tiago ticks and the librarian imports.
+to the import queue note, which the user ticks and the librarian imports.
 """
 
 from __future__ import annotations
@@ -403,4 +403,4 @@ class Scholar:
             text = existing if existing.endswith("\n") else existing + "\n"
             qpath.write_text(text + "\n".join(lines) + "\n", encoding="utf-8")
         return {"queue": str(qpath), "added": added, "skipped": skipped,
-                "next": "Tiago ticks the lines he wants; the librarian imports them."}
+                "next": "The user ticks the lines they want; the librarian imports them."}

@@ -464,7 +464,7 @@ class Librarian:
                                  "Check which one your notes and manuscripts cite before merging.")
             out.append(g)
         return {"groups": len(out), "duplicates": out,
-                "how_to_merge": "Merging is done by Tiago in Zotero (Duplicate Items, select the group, Merge). "
+                "how_to_merge": "Merging is done by the user in Zotero (Duplicate Items, select the group, Merge). "
                                 "Say what the evidence shows (identifiers, fields, files); do not call "
                                 "items duplicates on a similar title alone."}
 

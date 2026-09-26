@@ -1,9 +1,9 @@
 """Model test for tagging: the same sample of items, tagged by several models,
-scored against Tiago's own tags (the reference).
+scored against your own tags (the reference).
 
     zotero-bakeoff sample [--n 25] [--seed 1] [--force]
         Picks items without a topic/ tag, saves the sample, writes
-        Inbox/Model test reference.md for Tiago to fill in blind.
+        Inbox/Model test reference.md for you to fill in blind.
     zotero-bakeoff run --model opencode-go/glm-5.3-flash --model opencode-go/mimo-v2.6-pro
         Runs each model once through `opencode run` with the librarian agent. The
         model reads the sample (bakeoff_items) and saves proposals (bakeoff_submit).
@@ -12,7 +12,7 @@ scored against Tiago's own tags (the reference).
         Compares every model's proposals with the reference and writes
         Inbox/Model test results.md.
 
-Only topic/, method/ and type/ tags are scored. status/ is Tiago's call.
+Only topic/, method/ and type/ tags are scored. status/ is your call.
 """
 
 from __future__ import annotations
