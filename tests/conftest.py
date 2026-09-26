@@ -64,7 +64,7 @@ def fake() -> FakeZotero:
 @pytest.fixture
 def lib(fake: FakeZotero, tmp_path: Path) -> Library:
     vocab = tmp_path / "zotero-tags.md"
-    vocab.write_text(VOCAB)
+    vocab.write_text(VOCAB, encoding="utf-8")
     settings = Settings(api_url="http://127.0.0.1:23119/api", vocab_path=vocab,
                         marker="_agent", state_dir=tmp_path / "state", auth_timeout=5)
     client = LocalZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport())

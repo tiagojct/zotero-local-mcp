@@ -1,17 +1,35 @@
-# Publishes to PyPI when a tag like v0.4.0 is pushed. Needs a trusted publisher on
-# PyPI: owner tiagojct, repository zotero-local-mcp, workflow release.yml, environment pypi.
+# Publishes to PyPI when the version in pyproject.toml is not on PyPI yet, then tags
+# the commit (vX.Y.Z). Runs on pushes to main that change pyproject.toml, on version
+# tags, and by hand. Needs a trusted publisher on PyPI: owner tiagojct, repository
+# zotero-local-mcp, workflow release.yml, environment pypi.
 name: release
 on:
   push:
+    branches: [main]
+    paths: [pyproject.toml]
     tags: ["v*"]
+  workflow_dispatch:
 jobs:
   pypi:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv build
-      - run: uv publish --trusted-publishing always
+      - id: version
+        run: |
+          v=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if curl -sf "https://pypi.org/pypi/zotero-local-mcp/$v/json" > /dev/null; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "zotero-local-mcp $v is already on PyPI; nothing to publish."
+          fi
+      - if: steps.version.outputs.published != 'true'
+        run: uv build && uv publish --trusted-publishing always
+      - if: steps.version.outputs.published != 'true'
+        run: |
+          v=${{ steps.version.outputs.version }}
+          git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null || (git tag "v$v" && git push origin "v$v")

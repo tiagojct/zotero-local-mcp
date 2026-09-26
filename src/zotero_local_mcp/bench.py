@@ -59,7 +59,7 @@ async def prepare(lib: Library, ext: External, out: Path, seed: int = 7, n: int 
         ids = item_ids(d)
         rows.append({"key": d["key"], "citekey": current_key(d), "doi": ids["doi"], "pmid": ids["pmid"],
                      "title": d.get("title", ""), "year": year_of(d), "type": d.get("itemType")})
-    (out / "library-index.json").write_text(json.dumps(rows, ensure_ascii=False, indent=0))
+    (out / "library-index.json").write_text(json.dumps(rows, ensure_ascii=False, indent=0), encoding="utf-8")
 
     # ---- tagging: items with an abstract; the reference is made blind (reference.md
     # shows no current tags). Items without the review marker are not a reliable
@@ -70,7 +70,7 @@ async def prepare(lib: Library, ext: External, out: Path, seed: int = 7, n: int 
     sample = {"created": dt.date.today().isoformat(), "seed": seed, "keys": [i["key"] for i in chosen]}
     bdir = lib.s.state_dir / "bakeoff"
     bdir.mkdir(parents=True, exist_ok=True)
-    (bdir / "sample.json").write_text(json.dumps(sample, indent=1))
+    (bdir / "sample.json").write_text(json.dumps(sample, indent=1), encoding="utf-8")
 
     ref_lines = [
         "Blind reference for the tagging test. Current tags are not shown on purpose.",
@@ -163,7 +163,7 @@ async def prepare(lib: Library, ext: External, out: Path, seed: int = 7, n: int 
                    "year_from": dt.date.today().year - 2},
         "problems": problems,
     }
-    (out / "tasks.json").write_text(json.dumps(tasks, ensure_ascii=False, indent=1))
+    (out / "tasks.json").write_text(json.dumps(tasks, ensure_ascii=False, indent=1), encoding="utf-8")
     return {
         "out": str(out),
         "tagging_items": len(sample["keys"]),

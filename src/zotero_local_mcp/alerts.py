@@ -94,7 +94,7 @@ async def run(settings: Settings, today: dt.date | None = None, ext: External | 
         warnings.append(f"Zotero was not reachable, so works already in the library are not filtered out ({exc}).")
     seen_path = settings.state_dir / "alerts-seen.json"
     try:
-        seen: dict[str, str] = json.loads(seen_path.read_text())
+        seen: dict[str, str] = json.loads(seen_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         seen = {}
     sections, total = [], 0
@@ -151,7 +151,7 @@ async def run(settings: Settings, today: dt.date | None = None, ext: External | 
     cutoff = (today - dt.timedelta(days=KEEP_SEEN_DAYS)).isoformat()
     seen = {k: v for k, v in {**seen, **new_seen}.items() if v >= cutoff}
     seen_path.parent.mkdir(parents=True, exist_ok=True)
-    seen_path.write_text(json.dumps(seen))
+    seen_path.write_text(json.dumps(seen), encoding="utf-8")
     return {"new_works": total, "note": str(note) if note else None, "warnings": warnings}
 
 

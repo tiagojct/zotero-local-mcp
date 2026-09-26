@@ -215,7 +215,7 @@ async def test_single_use_keys_and_denial(lib, fake):
 
 async def test_remembered_key_is_saved_and_revocation_recovers(lib, fake, tmp_path):
     await lib.tag_items([{"key": "AAAA1111", "add": ["topic/spirometry"]}], dry_run=False)
-    saved = json.loads((tmp_path / "state" / "keys.json").read_text())
+    saved = json.loads((tmp_path / "state" / "keys.json").read_text(encoding="utf-8"))
     assert saved[fake.server_id] in fake.keys
     fake.keys.clear()  # user clicks "Clear Write Authorizations"
     res = await lib.tag_items([{"key": "BBBB2222", "add": ["topic/asthma"]}], dry_run=False)
@@ -243,7 +243,7 @@ def test_vocabulary_parsing(tmp_path):
         "---\nrequired_facets:\n  - topic\n  - status\nsingle_facets: [status]\n---\n"
         "## topic\n- `topic/asthma` — Asthma. aliases: Asthma, bronchial asthma\n"
         "- `topic/asthma` dup\n- `nofacet`\n* `status/read`\n"
-    )
+    , encoding="utf-8")
     v = Vocabulary.load(p)
     assert v.required_facets == ["topic", "status"] and v.single_facets == ["status"]
     assert v.entries["topic/asthma"].aliases == ["Asthma", "bronchial asthma"]
@@ -349,7 +349,7 @@ async def test_find_by_several_tags(lib):
 def _limits_vocab(lib, tmp_path):
     from conftest import VOCAB
     v = tmp_path / "limits.md"
-    v.write_text(VOCAB.replace("single_facets: status, type", "single_facets: status\nmax_per_facet: topic=2, type: 1"))
+    v.write_text(VOCAB.replace("single_facets: status, type", "single_facets: status\nmax_per_facet: topic=2, type: 1"), encoding="utf-8")
     lib.vocab = type(lib.vocab)(v)
     return lib.vocab.require()
 
@@ -380,7 +380,7 @@ async def test_apply_tag_review(lib, fake, tmp_path):
         "|---|---|---|---|---|---|\n"
         "| BBBB2222 | x2026 | Asthma control | topic/asthma, topic/spirometry | `topic/clinical-decision-support`, type/cohort | |\n"
         "| AAAA1111 | y2026 | Spirometry | | skip | not sure |\n"
-        "| CCCC3333 | west1974 | Book | | topic/spirometry; status/to-read | |\n")
+        "| CCCC3333 | west1974 | Book | | topic/spirometry; status/to-read | |\n", encoding="utf-8")
     prev = await lib.apply_tag_review(str(note))
     assert prev["dry_run"] and prev["rows"] == 2 and prev["would_change"] == 2
     res = await lib.apply_tag_review(str(note), dry_run=False)
@@ -390,7 +390,7 @@ async def test_apply_tag_review(lib, fake, tmp_path):
     assert b == {("topic/clinical-decision-support", 0), ("type/cohort", 0), ("status/read", 0), ("Asthma", 1)}
     c = {t["tag"] for t in fake.items["CCCC3333"]["tags"]}
     assert c == {"topic/spirometry", "status/to-read"}
-    assert "Applied" in note.read_text() and res["journal_id"] in note.read_text()
+    assert "Applied" in note.read_text(encoding="utf-8") and res["journal_id"] in note.read_text(encoding="utf-8")
     # undo restores the earlier tags, including the marker
     await lib.undo(res["journal_id"], dry_run=False)
     assert {"topic/spirometry", "_agent"} <= {t["tag"] for t in fake.items["BBBB2222"]["tags"]}
@@ -401,7 +401,7 @@ async def test_apply_tag_review_refuses_bad_rows(lib, fake, tmp_path):
     note = tmp_path / "bad.md"
     note.write_text("| Key | Proposed tags |\n|---|---|\n"
                     "| BBBB2222 | topic/asthma, topic/spirometry, topic/clinical-decision-support |\n"
-                    "| AAAA1111 | topic/made-up |\n| nokey | topic/asthma |\n")
+                    "| AAAA1111 | topic/made-up |\n| nokey | topic/asthma |\n", encoding="utf-8")
     with pytest.raises(ZoteroError) as exc:
         await lib.apply_tag_review(str(note))
     msg = str(exc.value)
@@ -429,7 +429,7 @@ async def test_apply_tag_review_once_and_changed_since_note(lib, fake, tmp_path)
     fake.items["BBBB2222"]["tags"] = [{"tag": "topic/asthma"}, {"tag": "status/read"}, {"tag": "_agent"}]
     note = tmp_path / "review.md"
     note.write_text("| Key | Current tags | Proposed tags |\n|---|---|---|\n"
-                    "| BBBB2222 | topic/asthma | topic/spirometry |\n")
+                    "| BBBB2222 | topic/asthma | topic/spirometry |\n", encoding="utf-8")
     fake.touch("BBBB2222", tags=[{"tag": "topic/asthma"}, {"tag": "topic/clinical-decision-support"},
                                  {"tag": "status/read"}, {"tag": "_agent"}])
     prev = await lib.apply_tag_review(str(note))
@@ -457,7 +457,7 @@ async def test_write_tag_review(lib, fake, tmp_path):
         {"key": "AAAA1111", "tags": "topic/spirometry, topic/asthma", "reason": ""},
     ], intro="Test batch.")
     assert res["path"] == "Inbox/Zotero tag review 40.md" and res["rows"] == 2
-    text = (vault / res["path"]).read_text()
+    text = (vault / res["path"]).read_text(encoding="utf-8")
     assert "| BBBB2222 |  | Jacinto 2026, Asthma control in primary care | Asthma | topic/asthma, type/cohort | a / pipe |" in text
     assert "Test batch." in text and "_agent" not in text.split("| Key |")[1]
     # the note applies as written
@@ -485,9 +485,9 @@ async def test_review_command(lib, fake, tmp_path, capsys):
     (vault / "Inbox").mkdir(parents=True)
     lib.s = type(lib.s)(**{**lib.s.__dict__, "vault": vault})
     for n, (key, tag) in enumerate([("AAAA1111", "topic/spirometry"), ("BBBB2222", "topic/asthma")], start=9):
-        (vault / "Inbox" / f"Zotero tag review {n}.md").write_text(f"| Key | Proposed tags |\n|---|---|\n| {key} | {tag} |\n")
+        (vault / "Inbox" / f"Zotero tag review {n}.md").write_text(f"| Key | Proposed tags |\n|---|---|\n| {key} | {tag} |\n", encoding="utf-8")
     (vault / "Inbox" / "Zotero tag review 10.md").write_text(
-        (vault / "Inbox" / "Zotero tag review 10.md").read_text() + "\nApplied 2026-09-01: 1 items (journal x).\n")
+        (vault / "Inbox" / "Zotero tag review 10.md").read_text() + "\nApplied 2026-09-01: 1 items (journal x).\n", encoding="utf-8")
 
     def ns(cmd, *notes, **kw):
         return argparse.Namespace(cmd=cmd, notes=list(notes), yes=kw.get("yes", False), again=False,

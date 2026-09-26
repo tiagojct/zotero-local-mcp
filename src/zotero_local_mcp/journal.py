@@ -34,13 +34,13 @@ class Journal:
             "undone_keys": [],
             "changes": changes,
         }
-        (self.dir / f"{entry_id}.json").write_text(json.dumps(entry, indent=1, ensure_ascii=False))
+        (self.dir / f"{entry_id}.json").write_text(json.dumps(entry, indent=1, ensure_ascii=False), encoding="utf-8")
         if undoes:
             orig = self.load(undoes)
             orig["undone_by"] = [*(orig.get("undone_by") or []), entry_id]
             orig["undone_keys"] = sorted({*(orig.get("undone_keys") or []),
                                           *(c["key"] for c in changes)})
-            (self.dir / f"{undoes}.json").write_text(json.dumps(orig, indent=1, ensure_ascii=False))
+            (self.dir / f"{undoes}.json").write_text(json.dumps(orig, indent=1, ensure_ascii=False), encoding="utf-8")
         return entry_id
 
     @staticmethod
@@ -52,13 +52,13 @@ class Journal:
         path = self.dir / f"{entry_id}.json"
         if not path.exists():
             raise LookupError(f"No journal entry {entry_id}")
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def entries(self) -> list[dict]:
         out = []
         for p in sorted(self.dir.glob("*.json")):
             try:
-                out.append(json.loads(p.read_text()))
+                out.append(json.loads(p.read_text(encoding="utf-8")))
             except ValueError:
                 continue
         return out

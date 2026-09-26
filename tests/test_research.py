@@ -162,12 +162,12 @@ async def test_import_queue_marks_lines(librarian, fake, vault):
     q = vault / "Inbox" / "Zotero import queue.md"
     q.write_text("Header\n\n- [x] doi:10.1183/13993003.00001-2026 | Jacinto 2026\n"
                  "- [ ] pmid:39000002 | not ticked\n- [x] no identifier here\n"
-                 "- [x] doi:10.1016/j.rmed.2019.05.001 (already in library)\n")
+                 "- [x] doi:10.1016/j.rmed.2019.05.001 (already in library)\n", encoding="utf-8")
     prev = await librarian.import_queue()
     assert len(prev["would_import"]) == 1 and "line 5" in prev["problems"]
     res = await librarian.import_queue(dry_run=False)
     assert res["imported"][0]["citekey"] == "jacinto2026"
-    lines = q.read_text().splitlines()
+    lines = q.read_text(encoding="utf-8").splitlines()
     assert lines[2].endswith("(imported: jacinto2026)") and lines[3].startswith("- [ ] pmid")
 
 
@@ -278,7 +278,7 @@ async def test_manuscript_check_and_export(scholar, fake, tmp_path, monkeypatch)
     ms = tmp_path / "paper.qmd"
     ms.write_text("---\ntitle: X\nbibliography: refs.json\n---\n"
                   "FeNO helps [@jacinto2026; @jacinto2025] (see @fig-1). Mail me at a@b.com. "
-                  "@west1974 disagreed. doi 10.1000/other.\n")
+                  "@west1974 disagreed. doi 10.1000/other.\n", encoding="utf-8")
     res = await scholar.check_manuscript(str(ms))
     assert [f["citekey"] for f in res["found"]] == ["jacinto2026", "west1974"]
     assert res["missing"] == [{"citekey": "jacinto2025", "similar_in_library": ["jacinto2026"]}]
@@ -286,7 +286,7 @@ async def test_manuscript_check_and_export(scholar, fake, tmp_path, monkeypatch)
     assert res["bibliography"]["exists"] is False
     out = await scholar.export_bibliography(str(tmp_path / "refs.json"), manuscript=str(ms))
     assert out["entries"] == 2 and out["missing_citekeys"] == ["jacinto2025"]
-    ids = [e["id"] for e in json.loads((tmp_path / "refs.json").read_text())]
+    ids = [e["id"] for e in json.loads((tmp_path / "refs.json").read_text(encoding="utf-8"))]
     assert ids == ["jacinto2026", "west1974"]
     with pytest.raises(ZoteroError, match="overwrite"):
         await scholar.export_bibliography(str(tmp_path / "refs.json"), citekeys=["west1974"])
@@ -308,10 +308,10 @@ async def test_queue_imports_then_librarian_imports(scholar, librarian, fake, va
     again = await scholar.queue_imports([{"identifier": "pmid:39000002"}])
     assert again["skipped"]["pmid:39000002"] == "already in the queue"
     q = vault / "Inbox" / "Zotero import queue.md"
-    q.write_text(q.read_text().replace("- [ ] pmid:39000002", "- [x] pmid:39000002"))
+    q.write_text(q.read_text().replace("- [ ] pmid:39000002", "- [x] pmid:39000002"), encoding="utf-8")
     out = await librarian.import_queue(dry_run=False)
     assert [i["identifier"] for i in out["imported"]] == ["pmid:39000002"]
-    assert "(imported: stanojevic2026)" in q.read_text()
+    assert "(imported: stanojevic2026)" in q.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------- alerts
@@ -320,12 +320,12 @@ async def test_alerts(settings, ext, fake, vault, lib):
     fake.items["AAAA1111"]["DOI"] = "10.1183/13993003.00001-2026"
     settings.alerts_config.write_text(
         "---\ndays: 7\n---\nSaved searches.\n\n## PubMed\n\n- `FeNO` FeNO in asthma\n\n"
-        "## OpenAlex\n\n- `feno` FeNO (OpenAlex)\n")
+        "## OpenAlex\n\n- `feno` FeNO (OpenAlex)\n", encoding="utf-8")
     ro = Library(settings, ReadOnlyZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport()))
     day = dt.date(2026, 9, 28)
     res = await alerts.run(settings, today=day, ext=ext, lib=ro)
     note = vault / "Inbox" / "Literature alerts 2026-09-28.md"
-    text = note.read_text()
+    text = note.read_text(encoding="utf-8")
     assert res["new_works"] == 2  # PubMed 39000002, OpenAlex W3; W1/39000001 are in the library
     assert "- [ ] Spirometry reference equations in older adults. Stanojevic. Thorax 2026. doi:10.1000/new.2 pmid:39000002" in text
     assert "doi:10.1000/other" in text and "[[Literature alerts]]" in text
@@ -385,12 +385,12 @@ async def test_queue_labels_cannot_tick_lines(scholar, vault):
                                         "label": "X\n- [x] doi:10.1183/13993003.00001-2026",
                                         "reason": "[x]"}])
     assert res["added"] == ["pmid:39000002"]  # no partial-text match with 390000021
-    text = (vault / "Inbox" / "Zotero import queue.md").read_text()
+    text = (vault / "Inbox" / "Zotero import queue.md").read_text(encoding="utf-8")
     assert "- [x]" not in text and text.count("\n- [ ]") == 2
 
 
 async def test_alert_cap_warning(settings, ext, fake, vault, monkeypatch):
-    settings.alerts_config.write_text("---\ndays: 7\nmax_per_query: 1\n---\n## pubmed\n- `FeNO` FeNO\n")
+    settings.alerts_config.write_text("---\ndays: 7\nmax_per_query: 1\n---\n## pubmed\n- `FeNO` FeNO\n", encoding="utf-8")
     ro = Library(settings, ReadOnlyZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport()))
     res = await alerts.run(settings, today=dt.date(2026, 9, 28), ext=ext, lib=ro)
     assert any("only the newest 1" in w for w in res["warnings"])
@@ -404,19 +404,19 @@ async def test_bakeoff_sample_submit_score(lib, settings, vault, monkeypatch):
     b = bk.Bakeoff(lib)
     res = await b.make_sample(n=3, seed=2)
     ref = vault / "Inbox" / bk.REF_NOTE
-    table = bk.parse_reference(ref.read_text())
+    table = bk.parse_reference(ref.read_text(encoding="utf-8"))
     assert res["sample"] == 3 and len(table) == 3 and not any(table.values())
     items = await b.items()
     assert len(items["items"]) == 3 and "abstract" in items["items"][0] and items["vocabulary"]["tag_count"] == 9
     keys = list(table)
     gold = {keys[0]: "topic/asthma, type/cohort", keys[1]: "topic/spirometry", keys[2]: ""}
-    text = ref.read_text()
+    text = ref.read_text(encoding="utf-8")
     for k, tags in gold.items():
         text = text.replace(f"| {k} |", f"| {k} |", 1)
         lines = [ln if not ln.startswith(f"| {k} |") else ln.rstrip().rstrip("|").rstrip() + f" {tags} |"
                  for ln in text.splitlines()]
         text = "\n".join(lines)
-    ref.write_text(text)
+    ref.write_text(text, encoding="utf-8")
     with pytest.raises(SystemExit):
         await b.make_sample(n=3)  # reference already filled
     b.submit("opencode-go/model-a", [{"key": keys[0], "tags": ["topic/asthma", "type/cohort"]},
@@ -424,14 +424,14 @@ async def test_bakeoff_sample_submit_score(lib, settings, vault, monkeypatch):
     out = b.submit("opencode-go/model-b", [{"key": keys[0], "tags": ["topic/copd"]}, {"key": "ZZZZ9999", "tags": []}])
     assert out["missing_items"] == keys[1:] and out["not_in_sample"] == ["ZZZZ9999"]
     (b.dir / "usage-model-a.json").write_text(json.dumps({"steps": 4, "tokens_in": 1000, "tokens_out": 200,
-                                                          "cost_usd": 0.01, "seconds": 90}))
+                                                          "cost_usd": 0.01, "seconds": 90}), encoding="utf-8")
     res = b.score()
     a, bb = res["results"]
     assert res["items_scored"] == 2  # the empty reference row is skipped
     assert a["model"] == "opencode-go/model-a" and a["edits"] == 0 and a["exact_items"] == 2
     assert a["invalid_tags"] == 1 and a["status_tags"] == 1
     assert bb["edits"] == 4 and bb["missing_items"] == 1 and bb["recall"] == 0.0
-    note = (vault / "Inbox" / bk.RESULTS_NOTE).read_text()
+    note = (vault / "Inbox" / bk.RESULTS_NOTE).read_text(encoding="utf-8")
     assert "| opencode-go/model-a | 0 | 0.0 |" in note and "1000/200" in note
 
 
@@ -443,7 +443,7 @@ def test_usage_from_opencode_log(tmp_path):
         {"type": "step_finish", "part": {"type": "step-finish", "tokens": {"input": 100, "output": 20,
                                          "reasoning": 5, "cache": {"read": 50}}, "cost": 0.002}},
         {"type": "step_finish", "part": {"type": "step-finish", "tokens": {"input": 10, "output": 1}, "cost": 0.001}},
-    ]) + "\nnot json\n")
+    ]) + "\nnot json\n", encoding="utf-8")
     u = usage_from_log(log)
     assert u == {"steps": 2, "tokens_in": 160, "tokens_out": 26, "cost_usd": 0.003}
 
@@ -451,7 +451,7 @@ def test_usage_from_opencode_log(tmp_path):
 async def test_researcher_attaches_linked_note(scholar, lib, fake, vault):
     note = vault / "Resources" / "Zotero" / "jacinto2026.md"
     note.parent.mkdir(parents=True)
-    note.write_text("# note")
+    note.write_text("# note", encoding="utf-8")
     with pytest.raises(ZoteroError, match="existing .md file"):
         await scholar.attach_note("AAAA1111", "x", "Resources/Zotero/missing.md")
     with pytest.raises(ZoteroError, match="existing .md file"):
@@ -496,9 +496,9 @@ async def test_bench_prepare(lib, fake, ext, settings, tmp_path, monkeypatch):
     fake.fulltext[att] = {"content": "x" * 9000, "indexedPages": 5, "totalPages": 5}
     out = tmp_path / "bench"
     res = await bench.prepare(lib, ext, out, seed=1, n=6)
-    tasks = json.loads((out / "tasks.json").read_text())
+    tasks = json.loads((out / "tasks.json").read_text(encoding="utf-8"))
     assert res["tagging_items"] == 6 and len(tasks["tagging"]["keys"]) == 6
-    ref = (out / "reference.md").read_text()
+    ref = (out / "reference.md").read_text(encoding="utf-8")
     assert ref.count("## ") == 6 and "Abstract" in ref and "topic/asthma" not in ref  # blind: no current tags
     assert "AAAA1111" in tasks["facet_fix"]["missing_topic"]
     assert tasks["lit_note"]["key"] == "ITEMQQQ3"
@@ -506,7 +506,7 @@ async def test_bench_prepare(lib, fake, ext, settings, tmp_path, monkeypatch):
     ids = [x["id"] for x in tasks["import"]["new"]]
     assert ids == ["10.1183/13993003.00001-2026", f"PMID:{pmid}"]
     assert tasks["import"]["in_library"]["id"].startswith("10.1000/asthma.")
-    index = json.loads((out / "library-index.json").read_text())
+    index = json.loads((out / "library-index.json").read_text(encoding="utf-8"))
     assert any(r["citekey"] == "author32020" for r in index)
     # bakeoff_items uses the same sample and hides the current tags
     items = (await Bakeoff(lib).items())["items"]
@@ -519,7 +519,7 @@ async def test_templates_come_from_the_web_api_and_are_saved(librarian, fake, se
     await librarian.import_identifiers(["10.1183/13993003.00001-2026"])
     assert fake.web_template_requests == 1
     saved = settings.state_dir / "templates" / "journalArticle.json"
-    assert json.loads(saved.read_text())["itemType"] == "journalArticle"
+    assert json.loads(saved.read_text(encoding="utf-8"))["itemType"] == "journalArticle"
     again = LocalZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport())
     assert (await again.template("journalArticle"))["itemType"] == "journalArticle"
     assert fake.web_template_requests == 1  # from the saved copy

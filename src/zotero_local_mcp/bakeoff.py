@@ -65,13 +65,13 @@ class Bakeoff:
         path = self.dir / "sample.json"
         if not path.exists():
             raise LookupError("No model test sample. Run: zotero-bakeoff sample")
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
 
     # ------------------------------------------------------------ sample
 
     async def make_sample(self, n: int = 25, seed: int = 1, force: bool = False) -> dict:
         ref = self.inbox / REF_NOTE
-        if ref.exists() and not force and any(parse_reference(ref.read_text()).values()):
+        if ref.exists() and not force and any(parse_reference(ref.read_text(encoding="utf-8")).values()):
             raise SystemExit(f"{ref} already has your tags. Use --force to replace the sample.")
         items = await self.lib.regular_items()
         pool = [i for i in items if not any(facet_of(t) == "topic" for t in manual(i["data"]))]
@@ -83,7 +83,7 @@ class Bakeoff:
         sample = {"created": dt.date.today().isoformat(), "seed": seed,
                   "keys": [i["key"] for i in chosen]}
         self.dir.mkdir(parents=True, exist_ok=True)
-        (self.dir / "sample.json").write_text(json.dumps(sample, indent=1))
+        (self.dir / "sample.json").write_text(json.dumps(sample, indent=1), encoding="utf-8")
         for old in self.dir.glob("proposals-*.json"):
             old.rename(old.with_suffix(".old"))
         rows = "\n".join(f"| {i['key']} | {current_key(i['data']) or ''} | {label(i['data']).replace('|', '/')} |  |"
@@ -131,7 +131,7 @@ class Bakeoff:
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / f"proposals-{name}.json").write_text(json.dumps(
             {"label": label_, "time": dt.datetime.now().isoformat(timespec="seconds"), "proposals": clean},
-            indent=1, ensure_ascii=False))
+            indent=1, ensure_ascii=False), encoding="utf-8")
         missing = [k for k in sample["keys"] if k not in clean]
         return {"saved": len(clean), "missing_items": missing, "not_in_sample": extra,
                 "tags_not_in_vocabulary": invalid}
@@ -150,7 +150,7 @@ class Bakeoff:
             cmd = ["opencode", "run", "--agent", "librarian", "--model", model, "--format", "json",
                    PROMPT.format(label=model)]
             t0 = time.time()
-            with log.open("w") as fh:
+            with log.open("w", encoding="utf-8") as fh:
                 try:
                     proc = subprocess.run(cmd, cwd=vault_cwd or self.s.vault, stdout=fh,
                                           stderr=subprocess.STDOUT, timeout=timeout)
@@ -161,7 +161,7 @@ class Bakeoff:
                     raise SystemExit("The opencode command was not found. Run this in your terminal.")
             usage = usage_from_log(log)
             usage.update(seconds=round(time.time() - t0), exit=code, submitted=prop.exists())
-            (self.dir / f"usage-{name}.json").write_text(json.dumps(usage))
+            (self.dir / f"usage-{name}.json").write_text(json.dumps(usage), encoding="utf-8")
             out[model] = usage
         return out
 
@@ -170,16 +170,16 @@ class Bakeoff:
     def score(self) -> dict:
         sample = self._sample()
         ref_path = self.inbox / REF_NOTE
-        reference = {k: v for k, v in parse_reference(ref_path.read_text()).items() if v and k in sample["keys"]}
+        reference = {k: v for k, v in parse_reference(ref_path.read_text(encoding="utf-8")).items() if v and k in sample["keys"]}
         if not reference:
             raise SystemExit(f"No reference tags yet. Fill the last column of {ref_path}.")
         vocab = self.lib.vocab.require()
         results = []
         for path in sorted(self.dir.glob("proposals-*.json")):
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             name = path.stem[len("proposals-"):]
             usage_path = self.dir / f"usage-{name}.json"
-            usage = json.loads(usage_path.read_text()) if usage_path.exists() else {}
+            usage = json.loads(usage_path.read_text(encoding="utf-8")) if usage_path.exists() else {}
             res = score_one(data["proposals"], reference, vocab.allows)
             res.update(model=data["label"], usage=usage)
             results.append(res)
@@ -278,7 +278,7 @@ def usage_from_log(path: Path) -> dict:
                 walk(v)
 
     try:
-        for line in path.read_text(errors="replace").splitlines():
+        for line in path.read_text(errors="replace", encoding="utf-8").splitlines():
             try:
                 walk(json.loads(line))
             except ValueError:

@@ -22,7 +22,7 @@ def payload(result):
 async def test_stdio_roundtrip(fake, tmp_path):
     srv, url = fake.serve()
     vocab = tmp_path / "zotero-tags.md"
-    vocab.write_text(VOCAB)
+    vocab.write_text(VOCAB, encoding="utf-8")
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "zotero_local_mcp.server"],

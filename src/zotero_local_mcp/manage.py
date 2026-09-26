@@ -481,7 +481,7 @@ class Librarian:
         with_doi = [(i["data"], d) for i in items if (d := item_ids(i["data"])["doi"])]
         path = self._cache_path()
         try:
-            cache = json.loads(path.read_text())
+            cache = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             cache = {}
         now = time.time()
@@ -502,7 +502,7 @@ class Librarian:
                 continue
             cache[doi] = {"checked": now, "notices": res}
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cache))
+        path.write_text(json.dumps(cache), encoding="utf-8")
         serious, other = [], []
         for data, doi in with_doi:
             notices = (cache.get(doi) or {}).get("notices") or []

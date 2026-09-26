@@ -125,14 +125,14 @@ class LocalZotero:
 
     def _load_key(self) -> str | None:
         try:
-            keys = json.loads(self._key_file.read_text())
+            keys = json.loads(self._key_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         return keys.get(self.server_id or "")
 
     def _save_key(self, key: str | None) -> None:
         try:
-            keys = json.loads(self._key_file.read_text())
+            keys = json.loads(self._key_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             keys = {}
         if key is None:
@@ -141,7 +141,7 @@ class LocalZotero:
             keys[self.server_id or ""] = key
         self.state_dir.mkdir(parents=True, exist_ok=True)
         tmp = self._key_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(keys, indent=2))
+        tmp.write_text(json.dumps(keys, indent=2), encoding="utf-8")
         os.chmod(tmp, 0o600)
         tmp.replace(self._key_file)
 
@@ -310,7 +310,7 @@ class LocalZotero:
         path = self.state_dir / "templates" / f"{item_type}{'-' + link_mode if link_mode else ''}.json"
         if path.exists():
             try:
-                return json.loads(path.read_text())
+                return json.loads(path.read_text(encoding="utf-8"))
             except ValueError:
                 pass
         try:
@@ -324,7 +324,7 @@ class LocalZotero:
             raise ZoteroError(f"No item template for {item_type}: api.zotero.org answered HTTP {r.status_code}.")
         data = r.json()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data))
+        path.write_text(json.dumps(data), encoding="utf-8")
         return data
 
     async def item(self, key: str) -> dict:
