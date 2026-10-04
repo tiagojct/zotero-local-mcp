@@ -3,12 +3,12 @@
 Two MCP servers for a local Zotero 10 library, plus a weekly alert script:
 
 - `zotero-local-mcp` (librarian): search and edit the library, faceted tagging with a controlled vocabulary, citekeys, imports by DOI/PMID/ISBN, metadata audit and repair, duplicates, retraction check, open-access PDFs, notes, collections, undo.
-- `zotero-scholar-mcp` (researcher): PubMed and OpenAlex search with "already in library" flags, citation graph, manuscript citation check, CSL JSON bibliographies for Quarto, import queue. It cannot write to Zotero.
+- `zotero-scholar-mcp` (researcher): PubMed, Europe PMC and OpenAlex search with "already in library" flags, one merged search over several phrasings and all three sources, open-access full text by sections, citation graph, manuscript citation check, CSL JSON bibliographies for Quarto, import queue. It cannot write to Zotero.
 - `zotero-alerts`: runs saved searches from an Obsidian note and writes new works to an Inbox note. No AI model.
 - `zotero-review`: preview or apply several tag review notes from the terminal (`zotero-review apply 13-31`: note numbers, or paths in the vault). Asks before it writes; notes already applied are left out.
 - `zotero-bakeoff`: model test for tagging. `sample` fixes 25 items and writes a reference note for your own tags; `run --model X` runs each model through `opencode run` (tools `bakeoff_items`, `bakeoff_submit`, no library writes); `score` writes precision, recall, edits needed, tokens and cost per model.
 
-The library is reached only through Zotero's local API on `127.0.0.1:23119`: no zotero.org key, changes appear in Zotero at once and sync as normal edits (WebDAV file sync is not affected). Outside metadata comes from Crossref, PubMed (NCBI E-utilities), OpenAlex, Unpaywall and Open Library.
+The library is reached only through Zotero's local API on `127.0.0.1:23119`: no zotero.org key, changes appear in Zotero at once and sync as normal edits (WebDAV file sync is not affected). Outside metadata comes from Crossref, PubMed (NCBI E-utilities), Europe PMC, OpenAlex, Unpaywall and Open Library.
 
 ## Safety
 
@@ -25,7 +25,8 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 
 | Librarian: read | Librarian: write (dry run by default) | Researcher |
 |---|---|---|
-| status, library_overview | tag_items, rename_tags, remove_tags | search_pubmed, search_openalex |
+| status, library_overview | tag_items, rename_tags, remove_tags | search_pubmed, search_openalex, search_europepmc |
+| | | search_multi, read_oa_fulltext |
 | find_items, get_item, get_fulltext | remove_automatic_tags, set_citekeys | get_work, citation_graph |
 | list_tags, get_vocabulary | update_fields, file_items, create_collection | library_lookup |
 | list_collections, history | create_note, trash_items, undo | check_manuscript |
@@ -98,6 +99,11 @@ The first write opens a Zotero dialog. Choose "Always Allow"; the key is saved i
 
 The tests use simulated services. Check on first use: trash and undo, the citekey location, one import, one PDF attachment (local file upload).
 
+## Literature search
+
+- `search_multi`: two to six phrasings of one question on PubMed, Europe PMC and OpenAlex in one call. The same work found by several searches is merged (DOI, PMID, PMCID, then title and year) and listed once, with `found_by` (source and query) and `in_library`. Works found most often come first. No abstracts, so the list stays short; read the chosen works with `get_work` or `read_oa_fulltext`.
+- `read_oa_fulltext`: open-access full text from Europe PMC. First call: the sections (title, IMRaD class, length), the abstract and the captions. Second call: only the sections needed (for example `methods`, `results`), with a character limit.
+
 ## Development
 
 ```sh
@@ -105,4 +111,8 @@ uv sync
 uv run pytest -q
 ```
 
-`tests/fake_zotero.py` imitates the Zotero 10 local API; `tests/fake_external.py` gives canned Crossref, PubMed, OpenAlex, Unpaywall and Open Library responses.
+`tests/fake_zotero.py` imitates the Zotero 10 local API; `tests/fake_external.py` gives canned Crossref, PubMed, Europe PMC, OpenAlex, Unpaywall and Open Library responses.
+
+## License
+
+MIT (see LICENSE). The Europe PMC full-text reading adapts code from Feynman (MIT, Companion, Inc.); see THIRD_PARTY_NOTICES.

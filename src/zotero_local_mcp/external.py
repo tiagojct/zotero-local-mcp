@@ -1,5 +1,5 @@
 """Clients for public scholarly services: Crossref, PubMed (NCBI E-utilities),
-OpenAlex, Unpaywall and Open Library. All return records (see records.py).
+OpenAlex, Europe PMC, Unpaywall and Open Library. All return records (see records.py).
 
 Rules: one shared HTTP client, at most four requests at a time, retry on 429
 and 5xx with back-off, and an identifying User-Agent with a contact address
@@ -26,6 +26,7 @@ EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 OPENALEX = "https://api.openalex.org"
 UNPAYWALL = "https://api.unpaywall.org/v2"
 OPENLIBRARY = "https://openlibrary.org"
+EUROPEPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 MAX_PDF = 60 * 1024 * 1024
 
 
@@ -227,6 +228,53 @@ class External:
             _, recs = await self._openalex_list({"filter": "openalex_id:" + "|".join(chunk), "per_page": 50})
             out.extend(recs)
         return out
+
+    # ------------------------------------------------------------ Europe PMC
+
+    def _epmc(self, extra: dict) -> dict:
+        return {**extra, "format": "json", **({"email": self.email} if self.email else {})}
+
+    async def europepmc_search(self, query: str, page_size: int = 25, year_from: int | None = None,
+                               year_to: int | None = None, open_access: bool = False) -> tuple[int, list[dict]]:
+        """Europe PMC search (its query syntax; PubMed, PMC, preprints, patents and more)."""
+        q = f"({query})" if (year_from or year_to or open_access) else query
+        if year_from or year_to:
+            q += f" AND PUB_YEAR:[{year_from or 1800} TO {year_to or 3000}]"
+        if open_access:
+            q += " AND OPEN_ACCESS:y"
+        r = await self._get(f"{EUROPEPMC}/search",
+                            self._epmc({"query": q, "resultType": "core", "pageSize": min(page_size, 100)}))
+        if r.status_code != 200:
+            raise ExternalError(f"Europe PMC search: HTTP {r.status_code}")
+        body = r.json()
+        return int(body.get("hitCount") or 0), [from_europepmc(x) for x in (body.get("resultList") or {}).get("result", [])]
+
+    async def europepmc_record(self, pmid: str | None = None, pmcid: str | None = None,
+                               doi: str | None = None) -> dict | None:
+        """One work by PMCID, PMID or DOI, or None. The record says whether full text is open."""
+        # PMCID must not be quoted: Europe PMC finds nothing for PMCID:"PMC123".
+        query = (f"PMCID:{pmcid.upper()}" if pmcid else f"EXT_ID:{pmid} AND SRC:MED" if pmid
+                 else f'DOI:"{doi}"' if doi else "")
+        if not query:
+            return None
+        _, recs = await self.europepmc_search(query, 1)
+        if not recs:
+            return None
+        rec = recs[0]
+        # Europe PMC returns its best hit; keep it only when the identifier is the one asked for.
+        if (pmcid and rec.get("pmcid", "").upper() != pmcid.upper()) or (pmid and rec.get("pmid") != pmid) \
+                or (doi and rec.get("doi") != norm_doi(doi)):
+            return None
+        return rec
+
+    async def europepmc_fulltext(self, pmcid: str) -> str | None:
+        """Open-access full text as JATS XML, or None when Europe PMC has none."""
+        r = await self._get(f"{EUROPEPMC}/{quote(pmcid.upper())}/fullTextXML")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise ExternalError(f"Europe PMC full text: HTTP {r.status_code}")
+        return r.text
 
     # ------------------------------------------------------------ Unpaywall, Open Library, files
 
@@ -437,6 +485,123 @@ def from_openalex(w: dict) -> dict:
         "openalex_id": (w.get("id") or "").rsplit("/", 1)[-1],
         "referenced_works": w.get("referenced_works") or [],
         "is_retracted": w.get("is_retracted"),
+    }
+
+
+def from_europepmc(r: dict) -> dict:
+    authors = []
+    for a in ((r.get("authorList") or {}).get("author") or []):
+        if a.get("lastName"):
+            authors.append({"family": a["lastName"], "given": a.get("firstName") or a.get("initials") or "",
+                            "role": "author"})
+        elif a.get("collectiveName") or a.get("fullName"):
+            authors.append({"name": a.get("collectiveName") or a.get("fullName"), "role": "author"})
+    journal = (r.get("journalInfo") or {}).get("journal") or {}
+    types = (r.get("pubTypeList") or {}).get("pubType") or []
+    source = r.get("source") or ""
+    return {
+        "source": "europepmc",
+        "kind": "preprint" if source == "PPR" else "journal-article",
+        "title": strip_markup(r.get("title")).rstrip("."),
+        "authors": authors,
+        "date": r.get("firstPublicationDate") or "",
+        "year": str(r.get("pubYear") or ""),
+        "container": journal.get("title") or r.get("bookOrReportDetails", {}).get("publisher", "") or "",
+        "doi": norm_doi(r.get("doi")),
+        "pmid": r.get("pmid") or "",
+        "pmcid": (r.get("pmcid") or "").upper(),
+        "abstract": strip_markup(r.get("abstractText")),
+        "cited_by": r.get("citedByCount"),
+        "open_access": r.get("isOpenAccess") == "Y" and r.get("inEPMC") == "Y",
+        "publication_types": types if isinstance(types, list) else [types],
+        "europepmc_id": f"{source}/{r.get('id')}" if source and r.get("id") else "",
+    }
+
+
+# Section classification and the JATS reading below follow Feynman's Europe PMC
+# full-text tool (MIT, Copyright (c) 2026 Companion, Inc., commit 39f3ece);
+# see THIRD_PARTY_NOTICES.
+
+def classify_section(title: str, sec_type: str = "") -> str:
+    """IMRaD class of a section. The title wins over sec-type: some publishers mark a
+    Discussion section sec-type="conclusions"."""
+    by_title = _classify_title(title)
+    if by_title != "other":
+        return by_title
+    by_type = {"conclusion": "conclusion", "conclusions": "conclusion", "discussion": "discussion",
+               "intro": "introduction", "introduction": "introduction", "methods": "methods",
+               "materials|methods": "methods", "results": "results"}
+    return by_type.get(sec_type.strip().lower(), "other")
+
+
+def _classify_title(title: str) -> str:
+    t = re.sub(r"^[0-9ivx]+[.):\s]+", "", title.strip().lower())
+    if re.match(r"(introduction|background)\b", t):
+        return "introduction"
+    if re.match(r"(materials?\s+and\s+methods?|methods?|methodology|experimental procedures?|online methods)\b", t):
+        return "methods"
+    if re.match(r"results?\s+and\s+discussion\b", t):
+        return "results_and_discussion"
+    if re.match(r"(results?|findings)\b", t):
+        return "results"
+    if re.match(r"discussion\b", t):
+        return "discussion"
+    if re.match(r"(conclusions?|summary)\b", t):
+        return "conclusion"
+    return "other"
+
+
+def _jats_text(el: ET.Element | None, skip: tuple[str, ...] = ()) -> str:
+    if el is None:
+        return ""
+    parts: list[str] = []
+
+    def walk(e: ET.Element) -> None:
+        if e.tag in skip:
+            if e.tail:
+                parts.append(e.tail)
+            return
+        if e.text:
+            parts.append(e.text)
+        for child in e:
+            walk(child)
+        if e.tail and e is not el:
+            parts.append(e.tail)
+
+    walk(el)
+    return re.sub(r"\s+", " ", "".join(parts)).strip()
+
+
+def parse_jats(xml: str) -> dict:
+    """Title, abstract, top-level sections (title, IMRaD class, full text), captions and counts."""
+    root = ET.fromstring(xml)
+    meta = root.find(".//front/article-meta")
+    body = root.find(".//body")
+    sections = []
+    for i, sec in enumerate(body.findall("sec") if body is not None else []):
+        title = _jats_text(sec.find("title"))
+        text = _jats_text(sec, skip=("fig", "table-wrap", "ref-list", "title"))
+        sections.append({"index": i, "title": title, "imrad": classify_section(title, sec.get("sec-type") or ""),
+                         "chars": len(text), "text": text})
+    if body is not None and not sections:  # a body of paragraphs without sections
+        text = _jats_text(body, skip=("fig", "table-wrap", "ref-list"))
+        if text:
+            sections.append({"index": 0, "title": "", "imrad": "other", "chars": len(text), "text": text})
+
+    def captions(tag: str) -> list[dict]:
+        return [{"label": _jats_text(n.find("label")), "caption": _jats_text(n.find("caption"))[:600]}
+                for n in root.iter(tag)][:8]
+
+    ref_list = root.find(".//back/ref-list")
+    return {
+        "title": _jats_text(meta.find("title-group/article-title")) if meta is not None else "",
+        "abstract": _jats_text(meta.find("abstract")) if meta is not None else "",
+        "sections": sections,
+        "figures": captions("fig"),
+        "tables": captions("table-wrap"),
+        "n_figures": sum(1 for _ in root.iter("fig")),
+        "n_tables": sum(1 for _ in root.iter("table-wrap")),
+        "n_references": len(ref_list.findall("ref")) if ref_list is not None else 0,
     }
 
 

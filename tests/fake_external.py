@@ -1,4 +1,4 @@
-"""Canned responses for Crossref, PubMed, OpenAlex, Unpaywall, Open Library and a PDF host."""
+"""Canned responses for Crossref, PubMed, OpenAlex, Europe PMC, Unpaywall, Open Library and a PDF host."""
 
 from __future__ import annotations
 
@@ -95,6 +95,30 @@ OPENLIBRARY = {
 }
 
 
+# Europe PMC: the FeNO paper (same work as PubMed 39000001, open access as PMC999) and a
+# preprint that only Europe PMC has.
+EUROPEPMC = [
+    {"id": "39000001", "source": "MED", "pmid": "39000001", "pmcid": "PMC999", "doi": "10.1183/13993003.00001-2026",
+     "title": "FeNO in children with asthma: a cohort study.", "pubYear": "2026", "firstPublicationDate": "2026-03-01",
+     "authorList": {"author": [{"lastName": "Jacinto", "firstName": "Tiago"}]},
+     "journalInfo": {"journal": {"title": "The European respiratory journal"}},
+     "abstractText": "<h4>Background</h4>FeNO matters.", "isOpenAccess": "Y", "inEPMC": "Y", "citedByCount": 5,
+     "pubTypeList": {"pubType": ["Journal Article"]}},
+    {"id": "PPR1", "source": "PPR", "doi": "10.1101/2026.01.01.000001", "title": "FeNO in preschool wheeze",
+     "pubYear": "2026", "authorList": {"author": [{"lastName": "Silva", "firstName": "Ana"}]},
+     "isOpenAccess": "N", "inEPMC": "N", "citedByCount": 0},
+]
+FULLTEXT = {"PMC999": """<?xml version="1.0"?>
+<article><front><article-meta><title-group><article-title>FeNO in children with asthma</article-title></title-group>
+<abstract><p>FeNO matters.</p></abstract></article-meta></front><body>
+<sec sec-type="intro"><title>Background</title><p>Asthma in children.</p></sec>
+<sec sec-type="methods"><title>Methods</title><p>We measured FeNO in 120 children.</p>
+<fig id="f1"><label>Figure 1</label><caption><p>Study flow.</p></caption></fig></sec>
+<sec><title>Results</title><p>FeNO above 35 ppb predicted attacks.</p></sec>
+<sec sec-type="conclusions"><title>Discussion</title><p>FeNO helps.</p></sec>
+</body><back><ref-list><ref id="r1"/><ref id="r2"/></ref-list></back></article>"""}
+
+
 def pubmed_xml(ids: list[str]) -> str:
     arts = []
     for pmid in ids:
@@ -173,6 +197,20 @@ class FakeExternal:
             if "search" in q:
                 res = [OPENALEX["W1"], OPENALEX["W3"]]
                 return js({"meta": {"count": 2}, "results": res})
+        if host == "www.ebi.ac.uk" and path.endswith("/search"):
+            query = q.get("query", "")
+            if query.startswith("PMCID:"):
+                hits = [r for r in EUROPEPMC if r.get("pmcid") == query.split(":", 1)[1]]
+            elif query.startswith("EXT_ID:"):
+                hits = [r for r in EUROPEPMC if r.get("pmid") == query.split(":", 1)[1].split(" ")[0]]
+            elif query.startswith('DOI:"'):
+                hits = [r for r in EUROPEPMC if r.get("doi") == query[5:-1].lower()]
+            else:
+                hits = EUROPEPMC
+            return js({"hitCount": len(hits), "resultList": {"result": hits[: int(q.get("pageSize", 25))]}})
+        if host == "www.ebi.ac.uk" and path.endswith("/fullTextXML"):
+            pmcid = path.split("/")[-2]
+            return httpx.Response(200, text=FULLTEXT[pmcid]) if pmcid in FULLTEXT else httpx.Response(500)
         if host == "api.unpaywall.org":
             doi = path[len("/v2/"):].lower()
             return js(UNPAYWALL[doi]) if doi in UNPAYWALL else js({"error": True}, 404)

@@ -13,7 +13,7 @@ from fake_external import PDF, FakeExternal
 from zotero_local_mcp import alerts
 from zotero_local_mcp.client import ZoteroError
 from zotero_local_mcp.config import Settings
-from zotero_local_mcp.external import External
+from zotero_local_mcp.external import External, ExternalError
 from zotero_local_mcp.library import Library
 from zotero_local_mcp.manage import Librarian, ids_in_line
 from zotero_local_mcp.records import detect, norm_doi, norm_isbn, zotero_to_csl
@@ -341,8 +341,9 @@ async def test_scholar_server_lists_tools(tmp_path):
     async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
         await s.initialize()
         names = {t.name for t in (await s.list_tools()).tools}
-    assert names == {"search_pubmed", "search_openalex", "get_work", "citation_graph", "library_lookup",
-                     "check_manuscript", "export_bibliography", "queue_imports", "attach_note"}
+    assert names == {"search_pubmed", "search_openalex", "search_europepmc", "search_multi", "read_oa_fulltext",
+                     "get_work", "citation_graph", "library_lookup", "check_manuscript", "export_bibliography",
+                     "queue_imports", "attach_note"}
 
 
 async def test_librarian_server_lists_new_tools(tmp_path):
@@ -554,3 +555,48 @@ async def test_audit_flags_one_page_articles(librarian, fake):
                   publicationTitle="J R Stat Soc A", DOI="10.1093/jrsssa/qnad123", date="2024")
     res = await librarian.audit(problem="1 or 2 pages (letter, editorial or book review?)")
     assert [r["key"] for r in res["items"]] == ["LLLL3333"]
+
+
+async def test_europepmc_search_and_multi_source_merge(scholar, fake):
+    fake.items["AAAA1111"].update(DOI="10.1183/13993003.00001-2026", extra="Citation Key: jacinto2026")
+    ep = await scholar.search_europepmc("feno", year_from=2020, open_access_only=True)
+    assert ep["results"][0]["pmcid"] == "PMC999" and ep["results"][0]["open_access"] is True
+    assert ep["results"][0]["in_library"]["citekey"] == "jacinto2026"
+    res = await scholar.search_multi(["feno", "FeNO children"], max_per_query=5)
+    assert res["queries"] == {"q1": "feno", "q2": "FeNO children"}
+    assert res["total_hits"]["europepmc"] == {"q1": 2, "q2": 2}
+    top = res["results"][0]
+    # PubMed, Europe PMC and OpenAlex each found the FeNO paper: one row, found by all
+    assert top["doi"] == "10.1183/13993003.00001-2026" and top["pmcid"] == "PMC999"
+    assert {"pubmed:q1", "europepmc:q1", "europepmc:q2", "openalex:q1", "openalex:q2"} <= set(top["found_by"])
+    assert top["in_library"]["citekey"] == "jacinto2026" and top["open_access"] is True
+    assert sum(1 for r in res["results"] if r.get("doi") == "10.1183/13993003.00001-2026") == 1
+    assert any(r.get("doi") == "10.1101/2026.01.01.000001" for r in res["results"])
+    assert "abstract" not in top
+    with pytest.raises(ValueError):
+        await scholar.search_multi(["  "])
+
+
+async def test_search_multi_keeps_going_when_a_source_fails(scholar, fx, monkeypatch):
+    async def down(*a, **k):
+        raise ExternalError("OpenAlex: HTTP 503")
+    monkeypatch.setattr(scholar.ext, "openalex_search", down)
+    res = await scholar.search_multi(["feno"], sources=["pubmed", "openalex"])
+    assert res["errors"] == ["openalex, query 1: OpenAlex: HTTP 503"]
+    assert res["returned"] == 2
+
+
+async def test_read_oa_fulltext_by_sections(scholar):
+    inv = await scholar.read_oa_fulltext("PMC999")
+    assert inv["status"] == "full_text" and inv["pmid"] == "39000001"
+    assert [(s["title"], s["imrad"]) for s in inv["sections"]] == [
+        ("Background", "introduction"), ("Methods", "methods"), ("Results", "results"), ("Discussion", "discussion")]
+    assert inv["n_references"] == 2 and inv["figures"][0]["caption"] == "Study flow."
+    part = await scholar.read_oa_fulltext("pmid:39000001", sections=["methods", "3", "appendix"], max_chars=1000)
+    assert [t["title"] for t in part["text"]] == ["Methods", "Discussion"]
+    assert part["text"][0]["text"] == "We measured FeNO in 120 children."  # figure captions left out
+    assert part["not_found"] == ["appendix"]
+    closed = await scholar.read_oa_fulltext("10.1101/2026.01.01.000001")
+    assert closed["status"] == "not_open_access"
+    missing = await scholar.read_oa_fulltext("PMC123")
+    assert missing["status"] == "not_found"

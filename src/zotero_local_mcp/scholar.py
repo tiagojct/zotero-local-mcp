@@ -1,4 +1,5 @@
-"""Research assistant operations: outside search, citation graph, manuscript
+"""Research assistant operations: outside search (PubMed, Europe PMC, OpenAlex, and
+all three at once), open-access full text by sections, citation graph, manuscript
 checks, bibliography export and the import queue.
 
 The researcher never writes to Zotero. Its library client refuses writes, so
@@ -8,6 +9,7 @@ to the import queue note, which the user ticks and the librarian imports.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import re
@@ -17,9 +19,9 @@ from typing import Any
 from .citekey import current_key
 from .client import LocalZotero, ZoteroError
 from .config import Settings
-from .external import External, ExternalError
+from .external import External, ExternalError, parse_jats
 from .library import Library, label, truncate
-from .records import DOI_RE, LibraryIndex, detect, label_of, norm_doi, zotero_to_csl
+from .records import DOI_RE, LibraryIndex, detect, fingerprint, label_of, norm_doi, zotero_to_csl
 
 CITE_RE = re.compile(r"(?<![\w.@])-?@([A-Za-z0-9_][A-Za-z0-9_:.#$%&\-+?<>~/]*)")
 CROSSREF_PREFIXES = ("fig-", "tbl-", "sec-", "eq-", "lst-", "thm-", "lem-", "cor-", "prp-", "def-", "exm-", "exr-")
@@ -111,6 +113,147 @@ class Scholar:
         rows = [self.row(r, index, abstracts) for r in recs]
         return {"source": "OpenAlex", "query": query, "total_hits": count, "returned": len(rows),
                 "already_in_library": sum(1 for r in rows if r["in_library"]), "results": rows}
+
+    async def search_europepmc(self, query: str, max_results: int = 25, year_from: int | None = None,
+                               year_to: int | None = None, open_access_only: bool = False,
+                               abstracts: bool = True) -> dict:
+        count, recs = await self.ext.europepmc_search(query, max_results, year_from, year_to, open_access_only)
+        index = await self.index()
+        rows = []
+        for r in recs:
+            row = self.row(r, index, abstracts)
+            row["pmcid"] = r.get("pmcid") or None
+            row["open_access"] = bool(r.get("open_access"))
+            rows.append(row)
+        return {"source": "Europe PMC", "query": query, "total_hits": count, "returned": len(rows),
+                "already_in_library": sum(1 for r in rows if r["in_library"]), "results": rows}
+
+    # ------------------------------------------------------------ several phrasings, three sources
+
+    SOURCES = ("pubmed", "europepmc", "openalex")
+
+    async def search_multi(self, queries: list[str], sources: list[str] | None = None,
+                           max_per_query: int = 10, year_from: int | None = None,
+                           year_to: int | None = None, limit: int = 40) -> dict:
+        """Run every phrasing on every source, merge the same work (DOI, PMID, PMCID, then title
+        and year), and return one compact list, works found most often first."""
+        queries = [q.strip() for q in queries if q and q.strip()][:6]
+        if not queries:
+            raise ValueError("Give at least one query.")
+        sources = [s for s in (sources or self.SOURCES) if s in self.SOURCES] or list(self.SOURCES)
+        per = max(1, min(max_per_query, 25))
+
+        async def run(source: str, qi: int) -> tuple[str, int, int, list[dict]]:
+            q = queries[qi]
+            if source == "pubmed":
+                count, ids = await self.ext.pubmed_search(q, per, None, "relevance", year_from, year_to)
+                return source, qi, count, await self.ext.pubmed_fetch(ids)
+            if source == "europepmc":
+                count, recs = await self.ext.europepmc_search(q, per, year_from, year_to)
+                return source, qi, count, recs
+            count, recs = await self.ext.openalex_search(q, per, year_from, year_to)
+            return source, qi, count, recs
+
+        jobs = [(s, i) for s in sources for i in range(len(queries))]
+        done = await asyncio.gather(*(run(s, i) for s, i in jobs), return_exceptions=True)
+        hits: dict[str, dict[str, int]] = {s: {} for s in sources}
+        errors: list[str] = []
+        merged: list[dict] = []
+        keys: dict[str, int] = {}
+        for (source, qi), res in zip(jobs, done):
+            if isinstance(res, Exception):
+                errors.append(f"{source}, query {qi + 1}: {res}")
+                continue
+            _, _, count, recs = res
+            hits[source][f"q{qi + 1}"] = count
+            for rank, rec in enumerate(recs):
+                ids = [f"doi:{rec['doi']}" if rec.get("doi") else "", f"pmid:{rec['pmid']}" if rec.get("pmid") else "",
+                       f"pmcid:{rec['pmcid']}" if rec.get("pmcid") else "",
+                       f"t:{fp}" if (fp := fingerprint(rec.get("title"), rec.get("year"))) else ""]
+                ids = [i for i in ids if i]
+                at = next((keys[i] for i in ids if i in keys), None)
+                if at is None:
+                    at = len(merged)
+                    merged.append({"rec": rec, "found": [], "best_rank": rank})
+                m = merged[at]
+                for i in ids:
+                    keys.setdefault(i, at)
+                m["found"].append(f"{source}:q{qi + 1}")
+                m["best_rank"] = min(m["best_rank"], rank)
+                for field in ("doi", "pmid", "pmcid", "container", "year"):  # fill gaps from other sources
+                    if not m["rec"].get(field) and rec.get(field):
+                        m["rec"] = {**m["rec"], field: rec[field]}
+                if rec.get("cited_by") is not None:
+                    m["cited_by"] = max(m.get("cited_by") or 0, rec["cited_by"])
+                if rec.get("open_access") or rec.get("oa_url"):
+                    m["open_access"] = True
+        index = await self.index()
+        merged.sort(key=lambda m: (-len(set(m["found"])), m["best_rank"], -(m.get("cited_by") or 0)))
+        rows = []
+        for m in merged[: max(1, min(limit, 100))]:
+            r = m["rec"]
+            rows.append({k: v for k, v in {
+                "title": truncate(r.get("title") or "", 180), "first_author": short_authors(r, 1),
+                "year": r.get("year"), "venue": r.get("container"), "doi": r.get("doi"),
+                "pmid": r.get("pmid") or None, "pmcid": r.get("pmcid") or None,
+                "open_access": m.get("open_access") or None, "cited_by": m.get("cited_by"),
+                "in_library": index.match_record(r), "found_by": sorted(set(m["found"])),
+            }.items() if v not in (None, "", [])})
+        return {"queries": {f"q{i + 1}": q for i, q in enumerate(queries)}, "total_hits": hits,
+                "unique_works": len(merged), "returned": len(rows),
+                "already_in_library": sum(1 for r in rows if r.get("in_library")),
+                **({"errors": errors} if errors else {}), "results": rows}
+
+    # ------------------------------------------------------------ open-access full text
+
+    async def read_oa_fulltext(self, identifier: str, sections: list[str] | None = None,
+                               max_chars: int = 12000) -> dict:
+        """Europe PMC open-access full text. Without sections: the section list, abstract,
+        figure and table captions. With sections (IMRaD names such as methods or results, or
+        section numbers): the text of those sections, at most max_chars in total."""
+        ident = identifier.strip()
+        if re.fullmatch(r"(?i)pmc\d+", ident) or ident.lower().startswith("pmcid:"):
+            rec = await self.ext.europepmc_record(pmcid=ident.split(":")[-1].strip())
+        else:
+            kind, value = await self._resolve(ident)
+            if kind not in ("doi", "pmid"):
+                raise ValueError("Give a PMCID, a PMID, a DOI or a Zotero item key with a DOI or PMID.")
+            rec = await self.ext.europepmc_record(**{kind: value})
+        if rec is None:
+            return {"identifier": identifier, "status": "not_found",
+                    "detail": "Europe PMC has no record for this identifier."}
+        head = {"identifier": identifier, "title": rec.get("title"), "pmid": rec.get("pmid") or None,
+                "pmcid": rec.get("pmcid") or None, "doi": rec.get("doi"),
+                "in_library": (await self.index()).match_record(rec)}
+        if not rec.get("open_access") or not rec.get("pmcid"):
+            return {**head, "status": "not_open_access",
+                    "detail": "Not in Europe PMC's open-access full-text set. Use the abstract, or the "
+                              "library's full text (zotero_get_fulltext) if the PDF is in Zotero.",
+                    "abstract": truncate(rec.get("abstract") or "", 2000)}
+        xml = await self.ext.europepmc_fulltext(rec["pmcid"])
+        if not xml:
+            return {**head, "status": "no_full_text", "abstract": truncate(rec.get("abstract") or "", 2000)}
+        doc = parse_jats(xml)
+        inventory = [{k: s[k] for k in ("index", "title", "imrad", "chars")} for s in doc["sections"]]
+        out = {**head, "status": "full_text", "source": f"Europe PMC {rec['pmcid']}", "sections": inventory,
+               "n_figures": doc["n_figures"], "n_tables": doc["n_tables"], "n_references": doc["n_references"]}
+        if not sections:
+            return {**out, "abstract": truncate(doc["abstract"] or rec.get("abstract") or "", 3000),
+                    "figures": doc["figures"], "tables": doc["tables"],
+                    "next": "Ask for sections by IMRaD name (methods, results...) or number."}
+        want = {str(x).strip().lower() for x in sections}
+        chosen = [s for s in doc["sections"] if s["imrad"] in want or str(s["index"]) in want
+                  or s["title"].lower() in want]
+        budget = max(1000, min(max_chars, 40000))
+        texts, used = [], 0
+        for s in chosen:
+            part = s["text"][: max(0, budget - used)]
+            used += len(part)
+            texts.append({"index": s["index"], "title": s["title"], "imrad": s["imrad"], "text": part,
+                          **({"truncated": True} if len(part) < len(s["text"]) else {})})
+        missing = sorted(want - {s["imrad"] for s in chosen} - {str(s["index"]) for s in chosen}
+                         - {s["title"].lower() for s in chosen})
+        return {**out, "text": texts, **({"not_found": missing} if missing else {})}
 
     async def _resolve(self, identifier: str) -> tuple[str, str | None]:
         """Zotero item key, DOI, PMID or OpenAlex id -> (kind, value) usable outside."""
