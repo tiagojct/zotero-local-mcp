@@ -50,7 +50,8 @@ PUBMED = {
                  "abstract": [("BACKGROUND", "FeNO matters."), ("RESULTS", "It predicts attacks.")],
                  "authors": [("Jacinto", "Tiago")], "journal": "European Respiratory Journal",
                  "abbr": "Eur Respir J", "year": "2026", "month": "Mar", "volume": "67", "issue": "3",
-                 "pages": "2500001", "pmc": "PMC999"},
+                 "pages": "2500001", "pmc": "PMC999",
+                 "affiliation": "MEDCIDS, Faculty of Medicine, University of Porto, Porto, Portugal. Electronic address: author@example.org."},
     "39000002": {"title": "Spirometry reference equations in older adults.", "doi": "10.1000/new.2",
                  "abstract": [(None, "New GLI data.")], "authors": [("Stanojevic", "Sanja")],
                  "journal": "Thorax", "abbr": "Thorax", "year": "2026", "month": "09", "volume": "81",
@@ -128,7 +129,9 @@ def pubmed_xml(ids: list[str]) -> str:
         abstract = "".join(
             f'<AbstractText Label="{lab}">{txt}</AbstractText>' if lab else f"<AbstractText>{txt}</AbstractText>"
             for lab, txt in r["abstract"])
-        authors = "".join(f"<Author><LastName>{f}</LastName><ForeName>{g}</ForeName></Author>" for f, g in r["authors"])
+        authors = "".join(f"<Author><LastName>{f}</LastName><ForeName>{g}</ForeName>"
+                          + (f"<AffiliationInfo><Affiliation>{r['affiliation']}</Affiliation></AffiliationInfo>"
+                             if r.get("affiliation") else "") + "</Author>" for f, g in r["authors"])
         pmc = f'<ArticleId IdType="pmc">{r["pmc"]}</ArticleId>' if r["pmc"] else ""
         arts.append(f"""<PubmedArticle><MedlineCitation><PMID>{pmid}</PMID><Article>
 <Journal><ISSN>0903-1936</ISSN><JournalIssue><Volume>{r['volume']}</Volume><Issue>{r['issue']}</Issue>

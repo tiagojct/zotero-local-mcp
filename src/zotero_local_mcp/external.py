@@ -394,7 +394,12 @@ def parse_pubmed_xml(text: str) -> list[dict]:
             body = _text(at)
             abstract.append(f"{label}: {body}" if label else body)
         authors = []
+        contacts = []
         for au in a.findall("AuthorList/Author"):
+            who = " ".join(x for x in (au.findtext("ForeName"), au.findtext("LastName")) if x) or au.findtext("CollectiveName") or ""
+            for aff in au.findall("AffiliationInfo/Affiliation"):
+                for email in EMAIL_RE.findall(_text(aff)):
+                    contacts.append({"author": who, "email": email.rstrip(".").lower(), "source": "PubMed affiliation"})
             if au.findtext("CollectiveName"):
                 authors.append({"name": au.findtext("CollectiveName"), "role": "author"})
             elif au.findtext("LastName"):
@@ -444,8 +449,12 @@ def parse_pubmed_xml(text: str) -> list[dict]:
             "abstract": "\n\n".join(abstract),
             "language": a.findtext("Language") or "",
             "publication_types": [pt.text for pt in a.findall("PublicationTypeList/PublicationType")],
+            "contacts": contacts,
         })
     return out
+
+
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
 def _inverted_abstract(inv: dict | None) -> str:

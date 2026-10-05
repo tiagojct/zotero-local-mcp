@@ -342,7 +342,7 @@ async def test_scholar_server_lists_tools(tmp_path):
         await s.initialize()
         names = {t.name for t in (await s.list_tools()).tools}
     assert names == {"search_pubmed", "search_openalex", "search_europepmc", "search_multi", "read_oa_fulltext",
-                     "get_work", "citation_graph", "library_lookup", "check_manuscript", "export_bibliography",
+                     "find_contact", "get_work", "citation_graph", "library_lookup", "check_manuscript", "export_bibliography",
                      "queue_imports", "attach_note"}
 
 
@@ -669,3 +669,13 @@ async def test_alerts_prescreen(settings, ext, fake, vault):
     line = next(x for x in text.splitlines() if "pmid:39000002" in x)
     assert ids_in_line(line) == "10.1000/new.2"
     assert ids_in_line(line.replace("doi:10.1000/new.2 ", "")) == "pmid:39000002"
+
+
+async def test_find_contact(scholar):
+    res = await scholar.find_contact("10.1183/13993003.00001-2026")
+    assert res["pmid"] == "39000001"
+    assert res["contacts"] == [{"author": "Tiago Jacinto", "email": "author@example.org", "source": "PubMed affiliation"}]
+    none = await scholar.find_contact("pmid:39000002")
+    assert none["contacts"] == [] and "Correspondence" in none["detail"]
+    missing = await scholar.find_contact("10.1000/not-in-pubmed")
+    assert missing["contacts"] == [] and "https://doi.org/10.1000/not-in-pubmed" in missing["detail"]

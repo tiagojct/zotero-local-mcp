@@ -26,7 +26,7 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 | Librarian: read | Librarian: write (dry run by default) | Researcher |
 |---|---|---|
 | status, library_overview | tag_items, rename_tags, remove_tags | search_pubmed, search_openalex, search_europepmc |
-| | | search_multi, read_oa_fulltext |
+| | | search_multi, read_oa_fulltext, find_contact |
 | find_items, get_item, get_fulltext | remove_automatic_tags, set_citekeys | get_work, citation_graph |
 | list_tags, get_vocabulary | update_fields, file_items, create_collection | library_lookup |
 | list_collections, history | create_note, trash_items, undo | check_manuscript |

@@ -142,6 +142,15 @@ async def get_work(identifier: str) -> dict:
 
 @mcp.tool(annotations=READ)
 @safe
+async def find_contact(identifier: str) -> dict:
+    """Email addresses of a work's authors from its PubMed record (the corresponding author's
+    address is usually in the affiliation), to ask for a copy of a paper. identifier: DOI,
+    pmid:123 or a Zotero key. Nothing is sent."""
+    return await scholar().find_contact(identifier)
+
+
+@mcp.tool(annotations=READ)
+@safe
 async def citation_graph(identifier: str, direction: str = "both", max_results: int = 50) -> dict:
     """What a work cites (references) and what cites it (cited_by), from OpenAlex, with the
     ones already in the library marked. identifier: DOI, pmid:123, W... or Zotero key.

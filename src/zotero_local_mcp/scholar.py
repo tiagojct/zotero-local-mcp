@@ -345,6 +345,34 @@ class Scholar:
         out["openalex_id"] = rec.get("openalex_id")
         return out
 
+    async def find_contact(self, identifier: str) -> dict:
+        """Email addresses of the authors of a work, as printed in its PubMed record (the
+        corresponding author's address is usually in the affiliation). Nothing is sent."""
+        kind, value = await self._resolve(identifier)
+        rec = None
+        if kind == "pmid":
+            recs = await self.ext.pubmed_fetch([value])
+            rec = recs[0] if recs else None
+        elif kind == "doi":
+            rec = await self.ext.pubmed_for_doi(value)
+        else:
+            raise ValueError("Give a DOI, a PMID or a Zotero item key with one.")
+        if rec is None:
+            return {"identifier": identifier, "contacts": [], "detail": "No PubMed record. Look for "
+                    "'Correspondence' on the article page" + (f": https://doi.org/{value}" if kind == "doi" else ".")}
+        seen, contacts = set(), []
+        for c in rec.get("contacts") or []:
+            if c["email"] not in seen:
+                seen.add(c["email"])
+                contacts.append(c)
+        out = {"identifier": identifier, "title": rec.get("title"), "pmid": rec.get("pmid"), "doi": rec.get("doi"),
+               "authors": short_authors(rec, 3), "year": rec.get("year"), "journal": rec.get("container"),
+               "contacts": contacts}
+        if not contacts:
+            out["detail"] = ("The PubMed record has no email address. Look for 'Correspondence' on the article page"
+                             + (f": https://doi.org/{rec['doi']}" if rec.get("doi") else "."))
+        return out
+
     async def citation_graph(self, identifier: str, direction: str = "both",
                              max_results: int = 50) -> dict:
         kind, value = await self._resolve(identifier)
