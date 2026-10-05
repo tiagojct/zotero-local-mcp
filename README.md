@@ -80,12 +80,16 @@ single_facets: status
 ---
 days: 7
 max_per_query: 20
+include_terms: asthma, exhaled nitric oxide, FeNO
+exclude_terms: mice, rat, in vitro
 ---
 ## pubmed
 - `FeNO[tiab] AND asthma[tiab]` FeNO in asthma
 ## openalex
 - `health data literacy` Health data literacy
 ```
+
+`include_terms` and `exclude_terms` are optional, comma-separated. When either is present, each new work gets a keyword pre-screen on its title and abstract (whole words or phrases, case- and accent-insensitive): +2 per include term in the title, +1 per include term only in the abstract. The decision is `exclude` when an exclude term matches, `pass` when the score is above 0, else `no_terms_matched`. It is written after the identifiers, for example `... doi:10.1000/x pmid:123 (prescreen: pass, score 3)`, so ticked lines import as before. Excluded works are not dropped: they move to a last section, "Probably not relevant (excluded terms)".
 
 ## Write authorization
 
@@ -102,6 +106,8 @@ The tests use simulated services. Check on first use: trash and undo, the citeke
 ## Literature search
 
 - `search_multi`: two to six phrasings of one question on PubMed, Europe PMC and OpenAlex in one call. The same work found by several searches is merged (DOI, PMID, PMCID, then title and year) and listed once, with `found_by` (source and query) and `in_library`. Works found most often come first. No abstracts, so the list stays short; read the chosen works with `get_work` or `read_oa_fulltext`.
+  - `rank_by`: `found` (default: number of searches that found the work, then best rank, then citations) or `cited` (number of searches plus citations divided by the highest citation count in the results). `cited` favours older work.
+  - `include_terms`, `exclude_terms`: optional keyword pre-screen on title and abstract, with the same rules as the alerts (see "Alerts file"). Each row then has `score` and `prescreen`; excluded works stay in the list but come last. `screening` gives the counts: records found by all searches, unique works, and works per decision. It is a word match, not a relevance judgement.
 - `read_oa_fulltext`: open-access full text from Europe PMC. First call: the sections (title, IMRaD class, length), the abstract and the captions. Second call: only the sections needed (for example `methods`, `results`), with a character limit.
 
 ## Development

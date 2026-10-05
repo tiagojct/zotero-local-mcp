@@ -22,6 +22,7 @@ from .config import Settings
 from .external import External, ExternalError, parse_jats
 from .library import Library, label, truncate
 from .records import DOI_RE, LibraryIndex, detect, fingerprint, label_of, norm_doi, zotero_to_csl
+from .screening import EXCLUDE, NO_TERMS, PASS, parse_terms, prescreen
 
 CITE_RE = re.compile(r"(?<![\w.@])-?@([A-Za-z0-9_][A-Za-z0-9_:.#$%&\-+?<>~/]*)")
 CROSSREF_PREFIXES = ("fig-", "tbl-", "sec-", "eq-", "lst-", "thm-", "lem-", "cor-", "prp-", "def-", "exm-", "exr-")
@@ -134,12 +135,22 @@ class Scholar:
 
     async def search_multi(self, queries: list[str], sources: list[str] | None = None,
                            max_per_query: int = 10, year_from: int | None = None,
-                           year_to: int | None = None, limit: int = 40) -> dict:
+                           year_to: int | None = None, limit: int = 40,
+                           include_terms: list[str] | None = None, exclude_terms: list[str] | None = None,
+                           rank_by: str = "found") -> dict:
         """Run every phrasing on every source, merge the same work (DOI, PMID, PMCID, then title
-        and year), and return one compact list, works found most often first."""
+        and year), and return one compact list, works found most often first.
+
+        include_terms / exclude_terms: keyword pre-screen on title and abstract (see screening.py);
+        excluded works stay in the list, last. rank_by: "found" (number of searches, best rank,
+        cited_by) or "cited" (number of searches + cited_by / highest cited_by in the set)."""
         queries = [q.strip() for q in queries if q and q.strip()][:6]
         if not queries:
             raise ValueError("Give at least one query.")
+        if rank_by not in ("found", "cited"):
+            raise ValueError("rank_by must be 'found' or 'cited'.")
+        include, exclude = parse_terms(include_terms), parse_terms(exclude_terms)
+        screen = bool(include or exclude)
         sources = [s for s in (sources or self.SOURCES) if s in self.SOURCES] or list(self.SOURCES)
         per = max(1, min(max_per_query, 25))
 
@@ -160,12 +171,14 @@ class Scholar:
         errors: list[str] = []
         merged: list[dict] = []
         keys: dict[str, int] = {}
+        retrieved = 0
         for (source, qi), res in zip(jobs, done):
             if isinstance(res, Exception):
                 errors.append(f"{source}, query {qi + 1}: {res}")
                 continue
             _, _, count, recs = res
             hits[source][f"q{qi + 1}"] = count
+            retrieved += len(recs)
             for rank, rec in enumerate(recs):
                 ids = [f"doi:{rec['doi']}" if rec.get("doi") else "", f"pmid:{rec['pmid']}" if rec.get("pmid") else "",
                        f"pmcid:{rec['pmcid']}" if rec.get("pmcid") else "",
@@ -180,7 +193,7 @@ class Scholar:
                     keys.setdefault(i, at)
                 m["found"].append(f"{source}:q{qi + 1}")
                 m["best_rank"] = min(m["best_rank"], rank)
-                for field in ("doi", "pmid", "pmcid", "container", "year"):  # fill gaps from other sources
+                for field in ("doi", "pmid", "pmcid", "container", "year", "abstract"):  # fill gaps
                     if not m["rec"].get(field) and rec.get(field):
                         m["rec"] = {**m["rec"], field: rec[field]}
                 if rec.get("cited_by") is not None:
@@ -188,21 +201,49 @@ class Scholar:
                 if rec.get("open_access") or rec.get("oa_url"):
                     m["open_access"] = True
         index = await self.index()
-        merged.sort(key=lambda m: (-len(set(m["found"])), m["best_rank"], -(m.get("cited_by") or 0)))
+        if screen:
+            for m in merged:
+                m["screen"] = prescreen(m["rec"].get("title"), m["rec"].get("abstract"), include, exclude)
+        top_cited = max((m.get("cited_by") or 0 for m in merged), default=0)
+
+        def order(m: dict) -> tuple:
+            excluded = screen and m["screen"]["prescreen"] == EXCLUDE
+            n = len(set(m["found"]))
+            if rank_by == "cited":
+                prior = n + ((m.get("cited_by") or 0) / top_cited if top_cited else 0)
+                return (excluded, -prior, m["best_rank"])
+            return (excluded, -n, m["best_rank"], -(m.get("cited_by") or 0))
+
+        merged.sort(key=order)
         rows = []
         for m in merged[: max(1, min(limit, 100))]:
             r = m["rec"]
-            rows.append({k: v for k, v in {
+            row = {k: v for k, v in {
                 "title": truncate(r.get("title") or "", 180), "first_author": short_authors(r, 1),
                 "year": r.get("year"), "venue": r.get("container"), "doi": r.get("doi"),
                 "pmid": r.get("pmid") or None, "pmcid": r.get("pmcid") or None,
                 "open_access": m.get("open_access") or None, "cited_by": m.get("cited_by"),
                 "in_library": index.match_record(r), "found_by": sorted(set(m["found"])),
-            }.items() if v not in (None, "", [])})
-        return {"queries": {f"q{i + 1}": q for i, q in enumerate(queries)}, "total_hits": hits,
-                "unique_works": len(merged), "returned": len(rows),
-                "already_in_library": sum(1 for r in rows if r.get("in_library")),
-                **({"errors": errors} if errors else {}), "results": rows}
+            }.items() if v not in (None, "", [])}
+            if screen:
+                row.update(m["screen"])
+            rows.append(row)
+        out: dict[str, Any] = {"queries": {f"q{i + 1}": q for i, q in enumerate(queries)}, "total_hits": hits,
+                               "unique_works": len(merged), "returned": len(rows),
+                               "already_in_library": sum(1 for r in rows if r.get("in_library"))}
+        if rank_by != "found":
+            out["rank_by"] = rank_by
+        if screen:
+            decisions = [m["screen"]["prescreen"] for m in merged]
+            out["screening"] = {"include_terms": include, "exclude_terms": exclude,
+                                "found": retrieved, "unique": len(merged),
+                                "prescreen_pass": decisions.count(PASS),
+                                "prescreen_exclude": decisions.count(EXCLUDE),
+                                "no_terms_matched": decisions.count(NO_TERMS)}
+        if errors:
+            out["errors"] = errors
+        out["results"] = rows
+        return out
 
     # ------------------------------------------------------------ open-access full text
 

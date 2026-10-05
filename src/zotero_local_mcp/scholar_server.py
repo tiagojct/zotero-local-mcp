@@ -102,12 +102,24 @@ async def search_europepmc(query: str, max_results: int = 25, year_from: int | N
 @mcp.tool(annotations=READ)
 @safe
 async def search_multi(queries: list[str], sources: list[str] | None = None, max_per_query: int = 10,
-                       year_from: int | None = None, year_to: int | None = None, limit: int = 40) -> dict:
+                       year_from: int | None = None, year_to: int | None = None, limit: int = 40,
+                       include_terms: list[str] | None = None, exclude_terms: list[str] | None = None,
+                       rank_by: str = "found") -> dict:
     """Search with several phrasings of one question (2 to 6) on PubMed, Europe PMC and OpenAlex
     at once. The same work found by several searches is merged (DOI, PMID, PMCID, title and
-    year) and listed once, with found_by (source:query) and in_library. Works found most often
-    come first. No abstracts: use get_work or read_oa_fulltext for the ones you choose."""
-    return await scholar().search_multi(queries, sources, max_per_query, year_from, year_to, limit)
+    year) and listed once, with found_by (source:query) and in_library. No abstracts: use
+    get_work or read_oa_fulltext for the ones you choose.
+    rank_by: "found" (default: works found by most searches first, then best rank, then
+    cited_by) or "cited" (number of searches + cited_by / highest cited_by in the results;
+    this favours older, much-cited work).
+    include_terms / exclude_terms: optional keyword pre-screen on title and abstract (whole
+    words or phrases, case- and accent-insensitive). Each row then gets score (+2 per include
+    term in the title, +1 per include term only in the abstract) and prescreen: "exclude" (an
+    exclude term matched), "pass" (score above 0) or "no_terms_matched". Excluded works are kept
+    but listed last; "screening" gives the counts. The pre-screen is a word match, not a
+    judgement of relevance."""
+    return await scholar().search_multi(queries, sources, max_per_query, year_from, year_to, limit,
+                                        include_terms, exclude_terms, rank_by)
 
 
 @mcp.tool(annotations=READ)

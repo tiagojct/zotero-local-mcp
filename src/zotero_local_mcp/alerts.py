@@ -5,6 +5,9 @@ Systems/Literature alerts.md), finds works from the last N days in PubMed and
 OpenAlex, drops works already in the library or already reported, and writes
 Inbox/Literature alerts YYYY-MM-DD.md with tick boxes. No AI model is used.
 The librarian's import_queue tool imports the ticked lines.
+
+Optional front-matter keys include_terms and exclude_terms (comma-separated) add a
+keyword pre-screen to each line; works with an exclude term go to the end of the note.
 """
 
 from __future__ import annotations
@@ -22,14 +25,16 @@ from .external import External, ExternalError
 from .library import Library
 from .records import LibraryIndex
 from .scholar import ReadOnlyZotero, short_authors
+from .screening import EXCLUDE, parse_terms, prescreen
 
 BULLET = re.compile(r"^\s*[-*+]\s+`([^`]+)`\s*(.*)$")
 KEEP_SEEN_DAYS = 365
+EXCLUDED_HEADING = "Probably not relevant (excluded terms)"
 
 
 def parse_config(path: Path) -> tuple[dict, list[tuple[str, str, str]]]:
     text = path.read_text(encoding="utf-8")
-    opts = {"days": 7, "max_per_query": 20}
+    opts: dict = {"days": 7, "max_per_query": 20, "include_terms": [], "exclude_terms": []}
     body = text
     fm = re.match(r"^---\n(.*?)\n---\n?", text, re.S)
     if fm:
@@ -37,6 +42,9 @@ def parse_config(path: Path) -> tuple[dict, list[tuple[str, str, str]]]:
             m = re.match(r"^\s*(days|max_per_query)\s*:\s*(\d+)", line)
             if m:
                 opts[m.group(1)] = int(m.group(2))
+            m = re.match(r"^\s*(include_terms|exclude_terms)\s*:\s*(.*)$", line)
+            if m:
+                opts[m.group(1)] = parse_terms(m.group(2))
         body = text[fm.end():]
     queries, source = [], None
     for line in body.splitlines():
@@ -58,7 +66,9 @@ def idents_of(rec: dict) -> list[str]:
     return [i for i in ids if i]
 
 
-def line_for(rec: dict) -> str:
+def line_for(rec: dict, screen: dict | None = None) -> str:
+    """Tick-box line. The identifiers stay the last doi:/pmid: tokens (manage.ids_in_line); the
+    pre-screen, when given, follows them in parentheses."""
     bits = [f"{(rec.get('title') or '').rstrip('.')}."]
     who = short_authors(rec)
     if who:
@@ -73,6 +83,8 @@ def line_for(rec: dict) -> str:
         ids.append(f"pmid:{rec['pmid']}")
     if not ids and rec.get("openalex_id"):
         ids.append(f"https://openalex.org/{rec['openalex_id']}")
+    if screen:
+        ids.append(f"(prescreen: {screen['prescreen']}, score {screen['score']})")
     return "- [ ] " + " ".join(bits + ids)
 
 
@@ -97,7 +109,9 @@ async def run(settings: Settings, today: dt.date | None = None, ext: External | 
         seen: dict[str, str] = json.loads(seen_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         seen = {}
-    sections, total = [], 0
+    include, exclude = opts["include_terms"], opts["exclude_terms"]
+    screening = bool(include or exclude)
+    sections, excluded, total = [], [], 0
     new_seen: dict[str, str] = {}
     since = today - dt.timedelta(days=opts["days"])
     for source, query, label in queries:
@@ -122,10 +136,16 @@ async def run(settings: Settings, today: dt.date | None = None, ext: External | 
                 continue
             for i in ids:
                 new_seen[i] = today.isoformat()
-            lines.append(line_for(rec))
+            total += 1
+            if not screening:
+                lines.append(line_for(rec))
+                continue
+            screen = prescreen(rec.get("title"), rec.get("abstract"), include, exclude)
+            (excluded if screen["prescreen"] == EXCLUDE else lines).append(line_for(rec, screen))
         if lines:
             sections.append(f"## {label} ({source})\n\n" + "\n".join(lines))
-            total += len(lines)
+    if excluded:
+        sections.append(f"## {EXCLUDED_HEADING}\n\n" + "\n".join(excluded))
     note = None
     if sections or warnings:
         inbox = settings.vault / "Inbox"
@@ -141,6 +161,10 @@ async def run(settings: Settings, today: dt.date | None = None, ext: External | 
                 f"New works from the saved searches in [[Literature alerts]], published in the last "
                 f"{opts['days']} days and not in the library. Tick what you want, then ask the librarian: "
                 f"\"Import the ticked items from {rel}\".\n")
+        if screening:
+            head += (f"\nKeyword pre-screen on title and abstract (include: {', '.join(include) or 'none'}; "
+                     f"exclude: {', '.join(exclude) or 'none'}). Score: +2 per include term in the title, "
+                     f"+1 per include term only in the abstract. Works with an exclude term are at the end.\n")
         parts = [head, *sections]
         if warnings:
             parts.append("## Warnings\n\n" + "\n".join(f"- {w}" for w in warnings))
@@ -152,7 +176,10 @@ async def run(settings: Settings, today: dt.date | None = None, ext: External | 
     seen = {k: v for k, v in {**seen, **new_seen}.items() if v >= cutoff}
     seen_path.parent.mkdir(parents=True, exist_ok=True)
     seen_path.write_text(json.dumps(seen), encoding="utf-8")
-    return {"new_works": total, "note": str(note) if note else None, "warnings": warnings}
+    out = {"new_works": total, "note": str(note) if note else None, "warnings": warnings}
+    if screening:
+        out["excluded"] = len(excluded)
+    return out
 
 
 def main() -> None:

@@ -600,3 +600,72 @@ async def test_read_oa_fulltext_by_sections(scholar):
     assert closed["status"] == "not_open_access"
     missing = await scholar.read_oa_fulltext("PMC123")
     assert missing["status"] == "not_found"
+
+
+# ---------------------------------------------------------------- keyword pre-screen and citation prior
+
+def test_prescreen_scores_and_matching():
+    from zotero_local_mcp.screening import parse_terms, prescreen
+    title, abstract = "Exhaled nitric oxide (FeNO) in COPD patients", "Função pulmonar e asma em crianças."
+    res = prescreen(title, abstract, ["feno", "funcao pulmonar", "Asma", "children"], [])
+    assert res == {"score": 4, "prescreen": "pass"}  # 2 (title) + 1 + 1 (abstract only); accents ignored
+    assert prescreen(title, abstract, ["COP"], [])["prescreen"] == "no_terms_matched"  # whole words only
+    assert prescreen(title, abstract, ["feno"], ["crianças"]) == {"score": 2, "prescreen": "exclude"}
+    assert prescreen(title, None, ["nitric oxide"], [])["score"] == 2  # phrase
+    assert prescreen(title, None, ["oxide nitric"], [])["score"] == 0
+    assert parse_terms(" asthma, [FeNO], 'nitric oxide' ,, asthma") == ["asthma", "FeNO", "nitric oxide"]
+
+
+async def test_search_multi_prescreen(scholar):
+    res = await scholar.search_multi(["feno", "FeNO children"], max_per_query=5,
+                                     include_terms=["asthma", "GLI", "Children"],
+                                     exclude_terms=["preschool wheeze"])
+    rows = {r["doi"]: r for r in res["results"]}
+    feno = rows["10.1183/13993003.00001-2026"]
+    assert (feno["score"], feno["prescreen"]) == (4, "pass")  # asthma and children in the title
+    assert (rows["10.1000/new.2"]["score"], rows["10.1000/new.2"]["prescreen"]) == (1, "pass")  # GLI in abstract
+    assert rows["10.1000/other"]["prescreen"] == "no_terms_matched"
+    # the excluded preprint is kept, but last
+    assert res["results"][-1]["doi"] == "10.1101/2026.01.01.000001"
+    assert res["results"][-1]["prescreen"] == "exclude"
+    assert all("abstract" not in r for r in res["results"])
+    assert res["screening"] == {"include_terms": ["asthma", "GLI", "Children"],
+                                "exclude_terms": ["preschool wheeze"], "found": 10, "unique": 4,
+                                "prescreen_pass": 2, "prescreen_exclude": 1, "no_terms_matched": 1}
+    plain = await scholar.search_multi(["feno"])
+    assert "screening" not in plain and all("prescreen" not in r and "score" not in r for r in plain["results"])
+
+
+async def test_search_multi_rank_by_cited(scholar, monkeypatch):
+    recs = [{"title": "A recent paper on spirometry", "year": "2025", "doi": "10.1000/a", "cited_by": 2},
+            {"title": "An older classic on spirometry", "year": "2005", "doi": "10.1000/b", "cited_by": 900}]
+
+    async def oa(*a, **k):
+        return 2, recs
+    monkeypatch.setattr(scholar.ext, "openalex_search", oa)
+    found = await scholar.search_multi(["x", "y"], sources=["openalex"])
+    assert [r["doi"] for r in found["results"]] == ["10.1000/a", "10.1000/b"] and "rank_by" not in found
+    cited = await scholar.search_multi(["x", "y"], sources=["openalex"], rank_by="cited")
+    assert [r["doi"] for r in cited["results"]] == ["10.1000/b", "10.1000/a"] and cited["rank_by"] == "cited"
+    with pytest.raises(ValueError):
+        await scholar.search_multi(["x"], rank_by="newest")
+
+
+async def test_alerts_prescreen(settings, ext, fake, vault):
+    settings.alerts_config.write_text(
+        "---\ndays: 7\ninclude_terms: asthma, GLI\nexclude_terms: other reference\n---\n"
+        "## PubMed\n\n- `FeNO` FeNO in asthma\n\n## OpenAlex\n\n- `feno` FeNO (OpenAlex)\n", encoding="utf-8")
+    ro = Library(settings, ReadOnlyZotero(settings.api_url, settings.state_dir, 5, transport=fake.transport()))
+    res = await alerts.run(settings, today=dt.date(2026, 9, 28), ext=ext, lib=ro)
+    assert res["new_works"] == 3 and res["excluded"] == 1  # 39000001, 39000002, W3 (W1 = 39000001)
+    text = (vault / "Inbox" / "Literature alerts 2026-09-28.md").read_text(encoding="utf-8")
+    assert ("- [ ] Spirometry reference equations in older adults. Stanojevic. Thorax 2026. "
+            "doi:10.1000/new.2 pmid:39000002 (prescreen: pass, score 1)") in text
+    assert "pmid:39000001 (prescreen: pass, score 2)" in text
+    head, tail = text.split("## Probably not relevant (excluded terms)")
+    assert "doi:10.1000/other" not in head and "doi:10.1000/other" in tail and "(prescreen: exclude, score 0)" in tail
+    assert "## Warnings" not in tail
+    # the import queue still reads the identifier of a ticked screened line
+    line = next(x for x in text.splitlines() if "pmid:39000002" in x)
+    assert ids_in_line(line) == "10.1000/new.2"
+    assert ids_in_line(line.replace("doi:10.1000/new.2 ", "")) == "pmid:39000002"
