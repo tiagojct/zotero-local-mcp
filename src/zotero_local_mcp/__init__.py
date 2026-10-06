@@ -1,4 +1,4 @@
 """MCP server for a local Zotero 10 library."""
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 APP_NAME = "zotero-local-mcp"

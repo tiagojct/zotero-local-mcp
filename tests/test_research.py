@@ -679,3 +679,20 @@ async def test_find_contact(scholar):
     assert none["contacts"] == [] and "Correspondence" in none["detail"]
     missing = await scholar.find_contact("10.1000/not-in-pubmed")
     assert missing["contacts"] == [] and "https://doi.org/10.1000/not-in-pubmed" in missing["detail"]
+
+
+async def test_import_queue_relative_path_is_in_the_vault(librarian, vault, monkeypatch, tmp_path):
+    (vault / "Inbox" / "Other queue.md").write_text("- [ ] doi:10.1/x | not ticked\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # the server runs elsewhere, e.g. in its own folder
+    prev = await librarian.import_queue("Inbox/Other queue.md")
+    assert prev["ticked"] == 0 and prev["queue"] == str(vault / "Inbox" / "Other queue.md")
+
+
+async def test_attach_note_links_the_obsidian_vault_above_the_folder(scholar, vault):
+    (vault.parent / ".obsidian").mkdir()  # vault/ is the Sub-Sub folder inside an Obsidian vault
+    note = vault / "Literature" / "jacinto2026.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# note", encoding="utf-8")
+    prev = await scholar.attach_note("AAAA1111", "Cohort of 500 children.", "Literature/jacinto2026.md")
+    root = vault.parent.name
+    assert prev["link"] == f"obsidian://open?vault={root}&file=vault%2FLiterature%2Fjacinto2026"

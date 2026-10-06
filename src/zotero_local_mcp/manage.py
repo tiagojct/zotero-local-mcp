@@ -198,6 +198,9 @@ class Librarian:
     async def import_queue(self, path: str | None = None, collection_key: str | None = None,
                            tags: list[str] | None = None, dry_run: bool = True) -> dict:
         qpath = Path(path).expanduser() if path else self.lib.s.queue_path
+        # A relative path is in the vault (the Sub-Sub folder), not in the server's working folder.
+        if path and qpath is not None and not qpath.is_absolute() and self.lib.s.vault is not None:
+            qpath = self.lib.s.vault / qpath
         if qpath is None or not qpath.exists():
             raise ZoteroError(f"No queue file at {qpath}.")
         lines = qpath.read_text(encoding="utf-8").splitlines()

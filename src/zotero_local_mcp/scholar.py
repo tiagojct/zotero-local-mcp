@@ -543,8 +543,11 @@ class Scholar:
         item = await self.lib.z.item(key)
         if not regular(item):
             raise ZoteroError("Notes can only be attached to regular items.")
-        rel = p.relative_to(vault.resolve()).with_suffix("").as_posix()
-        uri = f"obsidian://open?vault={quote(vault.name)}&file={quote(rel, safe='')}"
+        # The vault folder can be a folder inside an Obsidian vault (Sub-Sub/): the link names
+        # the Obsidian vault, the nearest folder up with .obsidian/, and the path from there.
+        root = next((d for d in (vault.resolve(), *vault.resolve().parents) if (d / ".obsidian").is_dir()), vault.resolve())
+        rel = p.relative_to(root).with_suffix("").as_posix()
+        uri = f"obsidian://open?vault={quote(root.name)}&file={quote(rel, safe='')}"
         for child in await self.lib.z.children(key):
             if child["data"].get("itemType") == "note" and uri in _html.unescape(child["data"].get("note", "")):
                 return {"skipped": "this item already has a note linking to that vault note",
