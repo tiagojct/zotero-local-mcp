@@ -416,6 +416,17 @@ class LocalZotero:
             return next(iter(ok.values()))
         return next(iter((data.get("successful") or {}).values()))["key"]
 
+    async def set_collection_deleted(self, key: str, deleted: bool) -> None:
+        """Move a collection to Zotero's trash (deleted = true) or back, as Zotero 7 and later do."""
+        col = await self.get_json(f"collections/{key}")
+        version = (col.get("data") or {}).get("version", col.get("version"))
+        r = await self._write("POST", "collections", [{"key": key, "version": version, "deleted": deleted}])
+        if r.status_code != 200:
+            raise ZoteroError(f"Changing the collection failed: HTTP {r.status_code} {r.text[:200]}")
+        failed = r.json().get("failed") or {}
+        if failed:
+            raise ZoteroError(f"Changing the collection failed: {json.dumps(failed)[:300]}")
+
     @staticmethod
     def _collect(r: httpx.Response, chunk: list[dict], result: WriteResult, creating: bool = False,
                  offset: int = 0) -> None:

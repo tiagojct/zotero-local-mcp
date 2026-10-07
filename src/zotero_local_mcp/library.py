@@ -940,8 +940,11 @@ class Library:
             return {"dry_run": True, "would_create": {"name": name, "parent": parent_key},
                     "next": "Nothing was written. Call again with dry_run=false after approval."}
         new_key = await self.z.create_collection(name, parent_key)
-        return {"created": new_key, "name": name,
-                "note": "Collections are not recorded in the journal. Remove it in Zotero if unwanted."}
+        jid = (await self.journal()).record(
+            "create_collection", f"collection {name}",
+            [{"key": new_key, "collection": True, "item": f"collection {name}",
+              "before": {"deleted": True}, "after": {"deleted": False}}])
+        return {"created": new_key, "name": name, "journal_id": jid}
 
     async def create_note(self, parent_key: str, markdown_text: str, dry_run: bool = True) -> dict:
         parent = await self.z.item(parent_key)
@@ -986,6 +989,24 @@ class Library:
         pending = [ch for ch in entry["changes"] if ch["key"] not in done_keys]
         if not pending:
             raise ZoteroError(f"{entry['id']} was already undone completely.")
+        undoing = {"id": entry["id"], "op": entry["op"], "summary": entry["summary"]}
+        # A new collection is undone by moving it to the trash (items in it stay in the library);
+        # undoing that undo brings it back.
+        cols = [ch for ch in pending if ch.get("collection")]
+        if cols:
+            if dry_run:
+                return {"dry_run": True, "operation": "undo", "would_change": len(cols),
+                        "changes": [{"key": ch["key"], "item": ch["item"],
+                                     "deleted": {"before": str(ch["after"]["deleted"]), "after": str(ch["before"]["deleted"])}}
+                                    for ch in cols],
+                        "not_shown": 0, "skipped": {}, "undoing": undoing,
+                        "next": "Nothing was written. Show this preview to the user and call again "
+                                "with dry_run=false only after they approve."}
+            for ch in cols:
+                await self.z.set_collection_deleted(ch["key"], bool(ch["before"]["deleted"]))
+            jid = j.record("undo", f"undo {entry['id']} ({entry['op']})",
+                           [{**ch, "before": ch["after"], "after": ch["before"]} for ch in cols], undoes=entry["id"])
+            return {"applied": len(cols), "skipped": {}, "failed": {}, "journal_id": jid, "undoing": undoing}
         edits: dict[str, Editor] = {}
         for ch in pending:
             def fn(data: dict, after=ch["after"], before=ch["before"]) -> dict:
@@ -997,5 +1018,5 @@ class Library:
             edits[ch["key"]] = fn
         out = await self._run("undo", f"undo {entry['id']} ({entry['op']})", edits, dry_run,
                               undoes=entry["id"])
-        out["undoing"] = {"id": entry["id"], "op": entry["op"], "summary": entry["summary"]}
+        out["undoing"] = undoing
         return out

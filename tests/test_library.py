@@ -198,6 +198,13 @@ async def test_collections_notes_trash(lib, fake):
     assert fake.items["DDDD4444"]["deleted"] is False
     await lib.undo(dry_run=False)  # trashes the note
     assert fake.items[note["created"]]["deleted"] is True
+    # the new collection is journaled; undo moves it to the trash, and undoing that brings it back
+    preview = await lib.undo(dry_run=True)
+    assert preview["would_change"] == 1 and preview["undoing"]["op"] == "create_collection"
+    res = await lib.undo(dry_run=False)
+    assert res["applied"] == 1 and fake.collections[created["created"]]["deleted"] is True
+    await lib.undo(res["journal_id"], dry_run=False)
+    assert fake.collections[created["created"]]["deleted"] is False
 
 
 # ---------------------------------------------------------------- auth

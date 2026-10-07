@@ -174,6 +174,11 @@ class FakeZotero:
                 ck = rest.split("/")[1]
                 items = [i for i in live if ck in i.get("collections", []) and not i.get("parentItem")]
                 return resp(200, [self._wrap(i) for i in items])
+            if rest.startswith("collections/") and rest.count("/") == 1:
+                c = self.collections.get(rest.split("/")[1])
+                if c is None:
+                    return resp(404, {"error": "not found"})
+                return resp(200, {"key": c["key"], "version": c["version"], "data": dict(c)})
             if rest == "collections":
                 return resp(200, [{"key": c["key"], "version": c["version"], "meta": {"numItems": 0},
                                    "data": dict(c)} for c in self.collections.values()])
