@@ -509,3 +509,48 @@ async def test_review_command(lib, fake, tmp_path, capsys):
     assert await review.run(ns("preview", "9-11"), lib) == 0
     out = capsys.readouterr().out
     assert "No note matches: Zotero tag review 11.md" in out and "review 9.md: already applied" in out
+
+
+async def test_field_change_is_not_reapplied_over_a_concurrent_edit(lib, fake):
+    orig = lib.z.items_by_keys
+    calls = {"n": 0}
+
+    async def racing(keys):
+        out = await orig(keys)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            fake.touch("AAAA1111", title="Edited in Zotero")
+        return out
+
+    lib.z.items_by_keys = racing
+    res = await lib.update_fields("AAAA1111", {"title": "Model's title"}, dry_run=False)
+    assert res["applied"] == 0
+    assert "changed in Zotero" in res["skipped"]["AAAA1111"]
+    assert fake.items["AAAA1111"]["title"] == "Edited in Zotero"  # the user's edit stays
+
+
+async def test_only_listed_tags_and_the_marker_can_be_added(lib, fake):
+    with pytest.raises(ZoteroError) as err:
+        await lib.tag_items([{"key": "AAAA1111", "add": ["_anything"]}])
+    assert "'_anything' is not in the vocabulary" in str(err.value)
+    res = await lib.tag_items([{"key": "AAAA1111", "add": ["topic/spirometry"]}], dry_run=False)
+    assert res["applied"] == 1 and ("_agent", 0) in tags_of(fake, "AAAA1111")
+
+
+async def test_undo_takes_journal_ids_only(lib, tmp_path):
+    evil = tmp_path / "evil.json"
+    evil.write_text('{"id": "x", "op": "tag_items", "changes": []}', encoding="utf-8")
+    for bad in [str(tmp_path / "evil"), "../../evil", "20261007-093000-00-tag_items/../../x"]:
+        with pytest.raises(Exception):
+            await lib.undo(journal_id=bad)
+
+
+async def test_review_notes_outside_the_vault_are_refused(lib, tmp_path):
+    import dataclasses
+    (tmp_path / "vault").mkdir()
+    lib.s = dataclasses.replace(lib.s, vault=tmp_path / "vault")
+    outside = tmp_path / "elsewhere.md"
+    outside.write_text("x", encoding="utf-8")
+    with pytest.raises(ZoteroError) as err:
+        lib._note_path(str(outside))
+    assert "outside the vault" in str(err.value)

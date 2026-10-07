@@ -56,10 +56,14 @@ class External:
         ua = f"{APP_NAME}/{__version__}" + (f" (mailto:{email})" if email else "")
         self.http = httpx.AsyncClient(timeout=40.0, transport=transport, follow_redirects=True,
                                       headers={"User-Agent": ua})
+        # PDFs come from any host Unpaywall names (and its redirects): no contact email there.
+        self.pdf_http = httpx.AsyncClient(timeout=40.0, transport=transport, follow_redirects=True,
+                                          headers={"User-Agent": f"{APP_NAME}/{__version__}"})
         self._sem = asyncio.Semaphore(4)
 
     async def aclose(self) -> None:
         await self.http.aclose()
+        await self.pdf_http.aclose()
 
     async def _get(self, url: str, params: dict | None = None) -> httpx.Response:
         async with self._sem:
@@ -309,7 +313,7 @@ class External:
     async def download_pdf(self, url: str) -> bytes:
         async with self._sem:
             try:
-                async with self.http.stream("GET", url, headers={"Accept": "application/pdf"}) as r:
+                async with self.pdf_http.stream("GET", url, headers={"Accept": "application/pdf"}) as r:
                     if r.status_code != 200:
                         raise ExternalError(f"download failed: HTTP {r.status_code}")
                     chunks, size = [], 0

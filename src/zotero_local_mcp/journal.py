@@ -9,6 +9,7 @@ current values still equal 'after' (items edited since are skipped).
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,9 @@ class Journal:
         return bool(keys) and keys <= set(entry.get("undone_keys") or [])
 
     def load(self, entry_id: str) -> dict:
+        # Only ids this journal writes (20261007-093000-00-tag_items): never a path to another file.
+        if not re.fullmatch(r"\d{8}-\d{6}-\d{2}-[a-z_]+", str(entry_id)):
+            raise LookupError(f"No journal entry {entry_id}")
         path = self.dir / f"{entry_id}.json"
         if not path.exists():
             raise LookupError(f"No journal entry {entry_id}")

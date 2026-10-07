@@ -485,9 +485,15 @@ class Library:
         done = {p["key"]: p for p in plan if p["key"] in res.succeeded}
         failed = dict(res.failed)
         error, not_sent = res.error, list(res.not_sent)
+        # Someone edited these items meanwhile. Tag and collection changes merge with that edit, so
+        # they are applied again on the new version; a field change would overwrite it, so it is skipped.
+        merging = {"tags", "collections"}
         conflicts = [k for k, (code, _) in failed.items() if code == 412 and k in edits]
+        for k in [k for k in conflicts if not set(next(p for p in plan if p["key"] == k)["after"]) <= merging]:
+            conflicts.remove(k)
+            failed.pop(k, None)
+            skipped[k] = "changed in Zotero while waiting for approval; nothing written. Run the change again to see a new preview."
         if conflicts and not error:
-            # Someone edited these items meanwhile: re-read them and apply the change again.
             plan2, skipped2 = await self._plan({k: edits[k] for k in conflicts})
             for k in conflicts:
                 failed.pop(k, None)
@@ -572,7 +578,8 @@ class Library:
         aliases = vocab.alias_map()
         errors = []
         for t in tags:
-            if vocab.allows(t):
+            # Added tags come from the list; of the system tags ("_"), only the review marker.
+            if t in vocab.entries or (self.s.marker and t == self.s.marker):
                 continue
             hint = aliases.get(t.lower()) or aliases.get(t.split("/", 1)[-1].lower())
             errors.append(f"'{t}' is not in the vocabulary" + (f" (alias of {hint})" if hint else ""))
@@ -760,6 +767,9 @@ class Library:
             p = self.s.vault / p
         if p.suffix != ".md":
             p = p.with_suffix(p.suffix + ".md") if p.suffix else p.with_suffix(".md")
+        # Review notes live in the vault; a path elsewhere is refused (the note gets a line appended).
+        if self.s.vault is not None and not p.resolve().is_relative_to(self.s.vault.resolve()):
+            raise ZoteroError(f"{p} is outside the vault ({self.s.vault}).")
         if not p.exists():
             raise ZoteroError(f"No note at {p}.")
         return p
