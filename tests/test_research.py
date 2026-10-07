@@ -696,3 +696,124 @@ async def test_attach_note_links_the_obsidian_vault_above_the_folder(scholar, va
     prev = await scholar.attach_note("AAAA1111", "Cohort of 500 children.", "Literature/jacinto2026.md")
     root = vault.parent.name
     assert prev["link"] == f"obsidian://open?vault={root}&file=vault%2FLiterature%2Fjacinto2026"
+
+
+# ---------------------------------------------------------------- files without a parent item
+
+@pytest.fixture
+def loose(fake):
+    col = fake.add_collection("Magazines")
+    a = fake.add_item(key="FILE0001", itemType="attachment", title="visao-1500.pdf", filename="visao-1500.pdf",
+                      contentType="application/pdf", linkMode="imported_file", collections=[col],
+                      dateAdded="2025-03-01T00:00:00Z")
+    b = fake.add_item(key="FILE0002", itemType="attachment", title="paper.pdf", filename="paper.pdf",
+                      contentType="application/pdf", linkMode="imported_file", dateAdded="2025-03-02T00:00:00Z")
+    n = fake.add_item(key="NOTE0002", itemType="note", note="<p>Loose thoughts</p>", dateAdded="2025-03-03T00:00:00Z")
+    return {"col": col, "magazine": a, "paper": b, "note": n}
+
+
+async def test_find_items_refuses_attachments(lib):
+    with pytest.raises(ZoteroError, match="standalone_items"):
+        await lib.find(item_type="attachment")
+
+
+async def test_standalone_items(lib, loose):
+    out = await lib.standalone_items()
+    assert [r["key"] for r in out["items"]] == ["FILE0001", "FILE0002", "NOTE0002"]
+    assert out["items"][0]["collections"] == ["Magazines"]
+    assert out["items"][2]["text"] == "Loose thoughts"
+    assert [r["key"] for r in (await lib.standalone_items("note"))["items"]] == ["NOTE0002"]
+    # Child notes (NOTE0001 under BBBB2222) are not listed.
+    assert "NOTE0001" not in {r["key"] for r in out["items"]}
+
+
+async def test_set_parent_items_preview_apply_undo(librarian, lib, fake, loose):
+    changes = [
+        {"child_key": "FILE0001", "item_type": "magazineArticle",
+         "fields": {"title": "O ano da vacina", "publicationTitle": "Visão", "date": "2022-01-13", "issue": "1500"},
+         "creators": [{"lastName": "Silva", "firstName": "Ana"}]},
+        {"child_key": "FILE0002", "identifier": "10.1183/13993003.00001-2026"},
+        {"child_key": "NOTE0002", "parent_key": "BBBB2222"},
+        {"child_key": "NOTE0001", "parent_key": "AAAA1111"},
+        {"child_key": "CCCC3333", "parent_key": "AAAA1111"},
+    ]
+    before = len(fake.items)
+    pv = await librarian.set_parent_items(changes, dry_run=True)
+    rows = {r["key"]: r for r in pv["would_set_parent"]}
+    assert rows["FILE0001"]["parent"] == "new" and rows["FILE0001"]["type"] == "magazineArticle"
+    assert rows["FILE0001"]["citekey"] == "silva2022"
+    assert rows["FILE0002"]["parent"] == "new" and rows["FILE0002"]["type"] == "journalArticle"
+    assert rows["NOTE0002"]["parent"] == "existing"
+    assert "already under" in pv["skipped"]["NOTE0001"]
+    assert "not a file" in pv["errors"]["CCCC3333"]
+    assert len(fake.items) == before  # the preview wrote nothing
+
+    out = await librarian.set_parent_items(changes, dry_run=False)
+    assert out["applied"] == 3, (out["failed"], out["skipped"])
+    mag = fake.items[next(p["parent"] for p in out["parents"] if p["file"] == "FILE0001")]
+    assert mag["itemType"] == "magazineArticle" and mag["publicationTitle"] == "Visão"
+    assert mag["collections"] == [loose["col"]]  # the file's collection moves to the new parent
+    assert {"tag": "_agent"} in mag["tags"] and mag["creators"][0]["lastName"] == "Silva"
+    assert fake.items["FILE0001"]["parentItem"] == mag["key"] and fake.items["FILE0001"]["collections"] == []
+    assert fake.items["NOTE0002"]["parentItem"] == "BBBB2222"
+
+    un = await lib.undo(out["journal_id"], dry_run=False)
+    assert un["applied"] == 5
+    assert not fake.items["FILE0001"].get("parentItem")
+    assert fake.items["FILE0001"]["collections"] == [loose["col"]]
+    assert mag["deleted"] is True
+    assert not fake.items["NOTE0002"].get("parentItem")
+
+
+async def test_set_parent_items_uses_existing_item(librarian, fake, loose):
+    # Same title, year and first author as AAAA1111: no second copy.
+    pv = await librarian.set_parent_items([{
+        "child_key": "FILE0002", "item_type": "journalArticle",
+        "fields": {"title": "Spirometry reference values in adults", "date": "2026"},
+        "creators": [{"lastName": "Jacinto", "firstName": "Tiago"}]}])
+    row = pv["would_set_parent"][0]
+    assert row["parent"] == "existing" and row["parent_key"] == "AAAA1111"
+
+
+async def test_set_parent_items_checks_fields(librarian, loose):
+    pv = await librarian.set_parent_items([
+        {"child_key": "FILE0001", "item_type": "magazineArticle", "fields": {"title": "X", "bookTitle": "Y"}},
+        {"child_key": "FILE0002", "item_type": "magazineArticle", "fields": {"date": "2020"}},
+        {"child_key": "NOTE0002", "parent_key": "AAAA1111", "identifier": "10.1/x"},
+    ])
+    assert "bookTitle" in pv["errors"]["FILE0001"]
+    assert "title" in pv["errors"]["FILE0002"]
+    assert "exactly one" in pv["errors"]["NOTE0002"]
+
+
+async def test_find_reference_and_web_search(librarian, fx):
+    out = await librarian.find_reference("Visão 1500")
+    by = {r["source"] for r in out["results"]}
+    assert by == {"crossref", "google_books", "internet_archive", "open_library", "wikidata"}
+    ia = next(r for r in out["results"] if r["source"] == "internet_archive")
+    assert ia == {"source": "internet_archive", "title": "Visão n.º 1500", "date": "2022-01-13",
+                  "publisher": "Trust in News", "url": "https://archive.org/details/visao-1500"}
+    wd = next(r for r in out["results"] if r["source"] == "wikidata")
+    assert wd["issn"] == ["0872-3540"]
+    gb = next(r for r in out["results"] if r["source"] == "google_books")
+    assert gb["kind"] == "magazine" and gb["title"] == "Visão: n.º 1500"
+    with pytest.raises(ExternalError, match="not set up"):
+        await librarian.web_search("Visão 1500")
+    librarian.ext.brave_api_key = "brave-ok"
+    res = await librarian.web_search("Visão 1500")
+    assert res["results"][0] == {"title": "Visão 1500", "url": "https://visao.pt/1500", "snippet": "Edição de 13 de janeiro"}
+    librarian.ext.brave_api_key = "wrong"
+    with pytest.raises(ExternalError, match="refused"):
+        await librarian.web_search("x")
+
+
+def test_citekeys_for_organisations():
+    from zotero_local_mcp.citekey import base_key
+    def key(name):
+        return base_key({"creators": [{"creatorType": "author", "name": name}], "date": "2026"})
+    assert key("World Health Organization") == "worldhealthorganization2026"
+    assert key("European Commission, Directorate-General for Research and Innovation") == "europeancommission2026"
+    assert key("Stanford Institute for Human-Centered Artificial Intelligence") == "stanfordinstitutehuman2026"
+    assert key("Direção-Geral da Saúde") == "direcaogeralsaude2026"
+    assert base_key({"title": "The Economist, N. 9514", "date": "2026-08-29"}) == "economist2026"
+    assert base_key({"title": "O Público", "date": "2020"}) == "publico2020"

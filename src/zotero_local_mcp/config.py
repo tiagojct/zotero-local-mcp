@@ -43,6 +43,8 @@ class Settings:
     email: str | None = None          # sent to Unpaywall (required), Crossref, OpenAlex, NCBI
     ncbi_api_key: str | None = None
     openalex_api_key: str | None = None
+    brave_api_key: str | None = None  # optional web search (Brave Search API)
+    google_books_api_key: str | None = None  # optional; without it Google Books shares one quota
     vault: Path | None = None         # Obsidian vault: import queue and alert notes
     alerts_config: Path | None = None
 
@@ -64,6 +66,8 @@ class Settings:
             email=env.get("ZOTERO_CONTACT_EMAIL") or None,
             ncbi_api_key=env.get("NCBI_API_KEY") or None,
             openalex_api_key=env.get("OPENALEX_API_KEY") or None,
+            brave_api_key=env.get("BRAVE_API_KEY") or None,
+            google_books_api_key=env.get("GOOGLE_BOOKS_API_KEY") or None,
             vault=vault,
             alerts_config=_path(env.get("ZOTERO_ALERTS"))
             or (vault / "Systems" / "Literature alerts.md" if vault else None),

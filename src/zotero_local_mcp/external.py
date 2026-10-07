@@ -26,6 +26,10 @@ EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 OPENALEX = "https://api.openalex.org"
 UNPAYWALL = "https://api.unpaywall.org/v2"
 OPENLIBRARY = "https://openlibrary.org"
+GOOGLE_BOOKS = "https://www.googleapis.com/books/v1/volumes"
+WIKIDATA = "https://www.wikidata.org/w/api.php"
+BRAVE = "https://api.search.brave.com/res/v1/web/search"
+ARCHIVE = "https://archive.org/advancedsearch.php"
 EUROPEPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 MAX_PDF = 60 * 1024 * 1024
 
@@ -49,8 +53,11 @@ def strip_markup(text: str | None) -> str:
 class External:
     def __init__(self, email: str | None = None, ncbi_api_key: str | None = None,
                  openalex_api_key: str | None = None,
-                 transport: httpx.AsyncBaseTransport | None = None) -> None:
+                 transport: httpx.AsyncBaseTransport | None = None,
+                 brave_api_key: str | None = None, google_books_api_key: str | None = None) -> None:
         self.email = email
+        self.brave_api_key = brave_api_key
+        self.google_books_api_key = google_books_api_key
         self.ncbi_api_key = ncbi_api_key
         self.openalex_api_key = openalex_api_key
         ua = f"{APP_NAME}/{__version__}" + (f" (mailto:{email})" if email else "")
@@ -65,12 +72,13 @@ class External:
         await self.http.aclose()
         await self.pdf_http.aclose()
 
-    async def _get(self, url: str, params: dict | None = None) -> httpx.Response:
+    async def _get(self, url: str, params: dict | None = None,
+                   headers: dict | None = None, tries: int = 4) -> httpx.Response:
         async with self._sem:
             last: Exception | None = None
-            for attempt in range(4):
+            for attempt in range(tries):
                 try:
-                    r = await self.http.get(url, params=params)
+                    r = await self.http.get(url, params=params, headers=headers)
                 except httpx.HTTPError as exc:
                     last = exc
                     await asyncio.sleep(1.5 * (attempt + 1))
@@ -309,6 +317,107 @@ class External:
             raise ExternalError(f"Open Library: HTTP {r.status_code}")
         data = r.json().get(key)
         return from_openlibrary(data, isbn) if data else None
+
+    # ------------------------------------------------------------ magazines, books, the web
+
+    async def google_books_search(self, query: str, rows: int = 5) -> list[dict]:
+        """Books and magazine issues (Google Books has many scanned magazines). No key needed."""
+        params = {"q": query, "maxResults": rows, "printType": "all"}
+        if self.google_books_api_key:
+            params["key"] = self.google_books_api_key
+        try:
+            # Without a key Google Books shares one daily quota among all users: fail fast.
+            r = await self._get(GOOGLE_BOOKS, params, tries=1 if not self.google_books_api_key else 3)
+        except ExternalError as exc:
+            raise ExternalError("Google Books is over its shared daily limit. A free key "
+                                "(GOOGLE_BOOKS_API_KEY) avoids this; the other sources still work.") from exc
+        if r.status_code != 200:
+            raise ExternalError(f"Google Books: HTTP {r.status_code}")
+        out = []
+        for v in r.json().get("items") or []:
+            info = v.get("volumeInfo") or {}
+            ids = {i.get("type"): i.get("identifier") for i in info.get("industryIdentifiers") or []}
+            out.append({k: x for k, x in {
+                "source": "google_books", "kind": (info.get("printType") or "").lower(),
+                "title": ": ".join(t for t in (info.get("title"), info.get("subtitle")) if t),
+                "authors": info.get("authors"), "publisher": info.get("publisher"),
+                "date": info.get("publishedDate"), "isbn": ids.get("ISBN_13") or ids.get("ISBN_10"),
+                "issn": ids.get("ISSN"), "pages": info.get("pageCount"), "language": info.get("language"),
+                "description": strip_markup(info.get("description"))[:300] or None,
+                "url": info.get("infoLink"),
+            }.items() if x not in (None, "", [])})
+        return out
+
+    async def archive_search(self, query: str, rows: int = 5) -> list[dict]:
+        """Internet Archive texts (many scanned magazines, books and reports). No key needed."""
+        r = await self._get(ARCHIVE, {"q": f"({query}) AND mediatype:texts", "rows": rows, "output": "json",
+                                      "fl[]": ["identifier", "title", "creator", "date", "publisher",
+                                               "volume", "issue", "language", "issn"]})
+        if r.status_code != 200:
+            raise ExternalError(f"Internet Archive: HTTP {r.status_code}")
+
+        def one(v: Any) -> Any:
+            return v[0] if isinstance(v, list) and len(v) == 1 else v
+
+        return [{k: x for k, x in {
+            "source": "internet_archive", "title": one(d.get("title")), "authors": d.get("creator"),
+            "date": (one(d.get("date")) or "")[:10], "publisher": one(d.get("publisher")),
+            "volume": one(d.get("volume")), "issue": one(d.get("issue")), "issn": one(d.get("issn")),
+            "language": one(d.get("language")), "url": f"https://archive.org/details/{d['identifier']}",
+        }.items() if x not in (None, "", [])} for d in (r.json().get("response") or {}).get("docs") or []]
+
+    async def openlibrary_search(self, query: str, rows: int = 5) -> list[dict]:
+        """Open Library books by title or author. No key needed."""
+        r = await self._get(f"{OPENLIBRARY}/search.json", {
+            "q": query, "limit": rows,
+            "fields": "key,title,subtitle,author_name,first_publish_year,publisher,isbn,language"})
+        if r.status_code != 200:
+            raise ExternalError(f"Open Library search: HTTP {r.status_code}")
+        return [{k: x for k, x in {
+            "source": "open_library", "kind": "book",
+            "title": ": ".join(t for t in (d.get("title"), d.get("subtitle")) if t),
+            "authors": (d.get("author_name") or [])[:5], "date": d.get("first_publish_year"),
+            "publisher": (d.get("publisher") or [None])[0], "isbn": (d.get("isbn") or [None])[0],
+            "url": f"{OPENLIBRARY}{d['key']}" if d.get("key") else None,
+        }.items() if x not in (None, "", [])} for d in r.json().get("docs") or []]
+
+    async def wikidata_search(self, query: str, rows: int = 5) -> list[dict]:
+        """Wikidata entities (magazines, newspapers, publishers): label, description, ISSN."""
+        r = await self._get(WIKIDATA, {"action": "wbsearchentities", "search": query, "language": "en",
+                                       "uselang": "en", "type": "item", "limit": rows, "format": "json"})
+        if r.status_code != 200:
+            raise ExternalError(f"Wikidata: HTTP {r.status_code}")
+        hits = r.json().get("search") or []
+        issn: dict[str, list[str]] = {}
+        if hits:
+            r2 = await self._get(WIKIDATA, {"action": "wbgetentities", "ids": "|".join(h["id"] for h in hits),
+                                            "props": "claims", "format": "json"})
+            if r2.status_code == 200:
+                for qid, ent in (r2.json().get("entities") or {}).items():
+                    issn[qid] = [c["mainsnak"]["datavalue"]["value"] for c in (ent.get("claims") or {}).get("P236", [])
+                                 if (c.get("mainsnak") or {}).get("datavalue")]
+        return [{k: x for k, x in {
+            "source": "wikidata", "id": h["id"], "title": h.get("label"),
+            "description": h.get("description"), "issn": issn.get(h["id"]) or None,
+            "url": h.get("concepturi"),
+        }.items() if x not in (None, "", [])} for h in hits]
+
+    async def web_search(self, query: str, count: int = 10) -> list[dict]:
+        """Brave Search web results (title, address, snippet). Needs BRAVE_API_KEY."""
+        if not self.brave_api_key:
+            raise ExternalError(
+                "Web search is not set up. The user can add a Brave Search API key with "
+                "'subsub init' (free tier at https://brave.com/search/api/). Use find_reference meanwhile.")
+        r = await self._get(BRAVE, {"q": query, "count": max(1, min(count, 20))},
+                            {"Accept": "application/json", "X-Subscription-Token": self.brave_api_key})
+        if r.status_code in (401, 403):
+            raise ExternalError("Brave Search refused the key. The user can check it in 'subsub init'.")
+        if r.status_code != 200:
+            raise ExternalError(f"Brave Search: HTTP {r.status_code}")
+        return [{k: x for k, x in {
+            "title": strip_markup(w.get("title")), "url": w.get("url"),
+            "snippet": strip_markup(w.get("description"))[:400], "age": w.get("age") or w.get("page_age"),
+        }.items() if x} for w in ((r.json().get("web") or {}).get("results") or [])]
 
     async def download_pdf(self, url: str) -> bytes:
         async with self._sem:

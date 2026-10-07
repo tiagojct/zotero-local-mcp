@@ -30,6 +30,8 @@ TEMPLATES = {
                     "pages": "", "ISBN": ""},
     "preprint": {"itemType": "preprint", **_COMMON, "repository": "", "archiveID": "", "DOI": ""},
     "document": {"itemType": "document", **_COMMON, "publisher": ""},
+    "magazineArticle": {"itemType": "magazineArticle", **_COMMON, "publicationTitle": "", "volume": "",
+                        "issue": "", "pages": "", "ISSN": ""},
     "attachment": {"itemType": "attachment", "linkMode": "imported_url", "title": "", "accessDate": "",
                    "url": "", "note": "", "contentType": "", "charset": "", "filename": "", "md5": None,
                    "mtime": None, "tags": [], "relations": {}},
@@ -219,7 +221,10 @@ class FakeZotero:
                     continue
                 patch = {k: v for k, v in obj.items() if k not in ("key", "version")}
                 if rest == "items":
-                    bad = [k for k in patch if k not in cur and k not in ("deleted", "citationKey")]
+                    # Files and notes may get or lose a parent item (real Zotero accepts this).
+                    child = cur.get("itemType") in ("note", "attachment")
+                    bad = [k for k in patch if k not in cur and k not in ("deleted", "citationKey")
+                           and not (child and k == "parentItem")]
                     if bad:
                         failed[idx] = {"key": okey, "code": 400, "message": f"invalid field {bad}"}
                         continue

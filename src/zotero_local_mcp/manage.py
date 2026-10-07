@@ -19,7 +19,7 @@ from typing import Any
 from .citekey import base_key, current_key, first_creator_name, slug, unique_key, with_key, year_of
 from .client import ZoteroError
 from .external import External, ExternalError
-from .library import Library, label, manual, regular
+from .library import PROTECTED_FIELDS, Library, label, manual, regular, truncate
 from .records import (
     DOI_RE, LibraryIndex, norm_doi, detect, extra_ids, fingerprint, item_ids, label_of, norm_isbn,
     record_to_zotero, title_similarity, zotero_type,
@@ -194,6 +194,251 @@ class Librarian:
             out["error"] = res.error
             out["not_sent"] = [plan[int(n)]["identifier"] for n in res.not_sent]
         return out
+
+    # ------------------------------------------------------------ finding a reference
+
+    async def find_reference(self, query: str, sources: list[str] | None = None, rows: int = 5) -> dict:
+        """Candidate references for a title, a magazine, an issue or a book, from Crossref
+        (articles, books, reports with a DOI), Google Books (books and magazine issues),
+        Internet Archive (scanned magazines, books, reports), Open Library (books) and
+        Wikidata (magazines, newspapers and publishers, with ISSN)."""
+        allowed = {"crossref", "google_books", "internet_archive", "open_library", "wikidata"}
+        wanted = [x for x in (sources or sorted(allowed)) if x in allowed]
+        if not wanted:
+            raise ZoteroError("sources: " + ", ".join(sorted(allowed)) + ".")
+        rows = max(1, min(rows, 10))
+
+        async def crossref() -> list[dict]:
+            out = []
+            for r in await self.ext.crossref_search(query, rows):
+                out.append({k: v for k, v in {
+                    "source": "crossref", "kind": r.get("kind"), "title": r.get("title"),
+                    "authors": [a.get("family") or a.get("name") for a in r.get("authors") or []][:5],
+                    "container": r.get("container"), "date": r.get("date"), "doi": r.get("doi"),
+                    "isbn": r.get("isbn"), "publisher": r.get("publisher"),
+                }.items() if v not in (None, "", [])})
+            return out
+
+        calls = {"crossref": crossref, "google_books": lambda: self.ext.google_books_search(query, rows),
+                 "internet_archive": lambda: self.ext.archive_search(query, rows),
+                 "open_library": lambda: self.ext.openlibrary_search(query, rows),
+                 "wikidata": lambda: self.ext.wikidata_search(query, rows)}
+        results = await asyncio.gather(*(calls[n]() for n in wanted), return_exceptions=True)
+        out: dict[str, Any] = {"query": query, "results": [], "errors": {}}
+        for name, res in zip(wanted, results):
+            if isinstance(res, Exception):
+                out["errors"][name] = str(res)
+            else:
+                out["results"].extend(res)
+        out["next"] = ("Check a candidate against the file's own text before using it. With a DOI or "
+                       "ISBN use set_parent_items identifier=; otherwise give the fields.")
+        return out
+
+    async def web_search(self, query: str, count: int = 10) -> dict:
+        return {"query": query, "results": await self.ext.web_search(query, count)}
+
+    # ------------------------------------------------------------ parent items
+
+    async def _new_parent(self, ch: dict, index: LibraryIndex) -> dict:
+        """The parent item for one change: an existing item, or a new one from an identifier
+        or from fields. Raises ValueError with a plain reason."""
+        given = [n for n in ("parent_key", "identifier", "fields") if ch.get(n)]
+        if len(given) != 1:
+            raise ValueError("give exactly one of parent_key, identifier or fields")
+        if ch.get("parent_key"):
+            found = await self.z.items_by_keys([ch["parent_key"]])
+            if not found or not regular(found[0]) or found[0]["data"].get("deleted"):
+                raise ValueError(f"{ch['parent_key']} is not a regular item in the library")
+            return {"existing": ch["parent_key"], "label": label(found[0]["data"])}
+        if ch.get("identifier"):
+            det = detect(ch["identifier"])
+            if det is None:
+                raise ValueError("not a DOI, PMID or ISBN")
+            kind, value = det
+            hit = index.lookup(**{kind: value})
+            if hit:
+                return {"existing": hit[0], "label": label(index.data[hit[0]]), "matched_by": hit[1]}
+            try:
+                rec = await self.record_for(kind, value)
+            except ExternalError as exc:
+                raise ValueError(str(exc)) from exc
+            if rec is None:
+                raise ValueError("not found in Crossref, PubMed or Open Library")
+            match = index.match_record(rec)
+            if match:
+                return {"existing": match["key"], "label": label(index.data[match["key"]]),
+                        "matched_by": match["matched_by"]}
+            return {"item": record_to_zotero(rec, await self._template(zotero_type(rec))),
+                    "source": rec.get("source")}
+        fields = dict(ch["fields"])
+        ztype = ch.get("item_type") or fields.pop("itemType", None)
+        if not ztype:
+            raise ValueError("fields need item_type, e.g. magazineArticle, book, report, document")
+        try:
+            item = dict(await self.z.template(ztype))
+        except ZoteroError as exc:
+            raise ValueError(f"unknown item type {ztype}") from exc
+        bad = sorted(f for f in fields if f in PROTECTED_FIELDS or f not in item or f == "creators")
+        if bad:
+            raise ValueError(f"fields that {ztype} does not have: {', '.join(bad)}")
+        item.update({f: str(v) for f, v in fields.items() if v not in (None, "")})
+        if not item.get("title"):
+            raise ValueError("a new parent item needs a title")
+        creators = []
+        for c in ch.get("creators") or []:
+            role = c.get("creatorType") or "author"
+            if c.get("lastName"):
+                creators.append({"creatorType": role, "lastName": c["lastName"], "firstName": c.get("firstName") or ""})
+            elif c.get("name"):
+                creators.append({"creatorType": role, "name": c["name"]})
+        item["creators"] = creators  # a template's empty creator is refused by Zotero
+        first = creators[0] if creators else {}
+        match = index.lookup(doi=item.get("DOI"), isbn=item.get("ISBN"), title=item["title"],
+                             year=year_of(item), first_author=first.get("lastName") or first.get("name"))
+        if match:
+            return {"existing": match[0], "label": label(index.data[match[0]]), "matched_by": match[1]}
+        item.setdefault("tags", [])
+        item.setdefault("collections", [])
+        item.setdefault("relations", {})
+        return {"item": item, "source": "given fields"}
+
+    async def set_parent_items(self, changes: list[dict], dry_run: bool = True) -> dict:
+        """Put files and notes that have no parent item under one: an existing item, or a new
+        item made from an identifier or from fields (title, date, publication...). A new item
+        gets a citekey, the review marker and the file's collections. Journaled: undo makes
+        the files top-level again (in their collections) and moves new items to the trash."""
+        if not changes:
+            raise ZoteroError("No changes given.")
+        if len(changes) > 25:
+            raise ZoteroError("At most 25 files per call.")
+        keys = [c.get("child_key", "") for c in changes]
+        found = {i["key"]: i for i in await self.z.items_by_keys([k for k in keys if k])}
+        index = LibraryIndex(await self.lib.regular_items())
+        taken = set(index.by_citekey)
+        marker = self.lib.s.marker
+        plan: list[dict] = []
+        skipped: dict[str, str] = {}
+        errors: dict[str, str] = {}
+        seen: set[str] = set()
+        for ch in changes:
+            ck = ch.get("child_key", "")
+            child = found.get(ck)
+            if ck in seen:
+                skipped[ck] = "listed twice"
+                continue
+            seen.add(ck)
+            if child is None:
+                errors[ck or "?"] = "not found"
+                continue
+            d = child["data"]
+            if d.get("itemType") not in ("attachment", "note"):
+                errors[ck] = "not a file or a note; only files and notes can have a parent item"
+                continue
+            if d.get("deleted"):
+                errors[ck] = "in the trash"
+                continue
+            if d.get("parentItem"):
+                skipped[ck] = f"already under {d['parentItem']}"
+                continue
+            try:
+                parent = await self._new_parent(ch, index)
+            except ValueError as exc:
+                errors[ck] = str(exc)
+                continue
+            if "item" in parent:
+                item = parent["item"]
+                citekey = unique_key(base_key(item), taken)
+                taken.add(citekey)
+                item.update(with_key(item, citekey))
+                item["tags"] = [{"tag": marker}] if marker else []
+                item["collections"] = list(d.get("collections") or [])
+                index.add(f"NEW{len(plan)}", item)
+                parent["citekey"] = citekey
+                parent["label"] = label(item)
+            plan.append({"child": child, "parent": parent})
+
+        def file_label(d: dict) -> str:
+            if d.get("itemType") == "note":
+                return "note: " + truncate(re.sub(r"<[^>]+>", " ", d.get("note") or "").strip(), 60)
+            return truncate(d.get("filename") or d.get("title") or d["key"], 60)
+
+        if dry_run:
+            rows = []
+            for p in plan:
+                par = p["parent"]
+                row: dict[str, Any] = {"file": file_label(p["child"]["data"]), "key": p["child"]["key"]}
+                if "existing" in par:
+                    row |= {"parent": "existing", "parent_key": par["existing"], "item": par["label"]}
+                    if par.get("matched_by"):
+                        row["matched_by"] = par["matched_by"]
+                else:
+                    it = par["item"]
+                    row |= {"parent": "new", "item": par["label"], "type": it["itemType"],
+                            "citekey": par["citekey"], "source": par.get("source"),
+                            "fields": {k: v for k, v in it.items()
+                                       if k not in ("itemType", "title", "creators", "tags", "collections",
+                                                    "relations", "citationKey", "extra")
+                                       and v not in ("", [], {}, None)}}
+                rows.append(row)
+            return {"dry_run": True, "operation": "set_parent_items", "would_set_parent": rows,
+                    "skipped": skipped, "errors": errors,
+                    "next": "Nothing was written. Show this preview to the user and call again "
+                            "with dry_run=false only after they approve."}
+        if not plan:
+            return {"applied": 0, "skipped": skipped, "errors": errors, "journal_id": None}
+        new = [p for p in plan if "item" in p["parent"]]
+        failed: dict[str, str] = {}
+        if new:
+            res = await self.z.create_items([p["parent"]["item"] for p in new])
+            for pos, key in res.created_at.items():
+                new[pos]["parent"]["existing"] = key
+            for p in new:
+                if "existing" not in p["parent"]:
+                    failed[p["child"]["key"]] = "the new parent item could not be created" + (
+                        f": {res.error}" if res.error else "")
+        ready = [p for p in plan if "existing" in p["parent"]]
+        edits = {p["child"]["key"]: (lambda data, pk=p["parent"]["existing"]: {"parentItem": pk, "collections": []})
+                 for p in ready}
+        moves, skip2 = await self.lib._plan(edits)
+        skipped.update(skip2)
+        done: dict[str, dict] = {}
+        if moves:
+            r = await self.z.update_items([{"key": m["key"], "version": m["data"]["version"], **m["after"]}
+                                           for m in moves])
+            done = {m["key"]: m for m in moves if m["key"] in r.succeeded}
+            for k, (code, msg) in r.failed.items():
+                failed[k] = f"HTTP {code}: {msg}"
+            for k in r.not_sent:
+                failed[k] = r.error or "not sent"
+        # A new parent whose file could not be moved under it is not left behind.
+        orphans = [p["parent"]["existing"] for p in new
+                   if "existing" in p["parent"] and p["child"]["key"] not in done]
+        if orphans:
+            for it in await self.z.items_by_keys(orphans):
+                await self.z.update_items([{"key": it["key"], "version": it["version"], "deleted": True}])
+        by_child = {p["child"]["key"]: p for p in plan}
+        journal_id = None
+        if done:
+            rows = []
+            for k, m in done.items():
+                rows.append({"key": k, "item": file_label(m["data"]), "before": m["before"], "after": m["after"]})
+            for k in done:
+                par = by_child[k]["parent"]
+                if "item" in par:
+                    rows.append({"key": par["existing"], "item": par["label"],
+                                 "before": {"deleted": True}, "after": {"deleted": False}})
+            journal_id = (await self.lib.journal()).record(
+                "set_parent_items", f"parent items for {len(done)} files", rows)
+        return {
+            "applied": len(done),
+            "parents": [{"file": k, "parent": by_child[k]["parent"]["existing"],
+                         "new": "item" in by_child[k]["parent"], "item": by_child[k]["parent"]["label"]}
+                        for k in done],
+            "skipped": skipped,
+            "errors": errors,
+            "failed": failed,
+            "journal_id": journal_id,
+        }
 
     async def import_queue(self, path: str | None = None, collection_key: str | None = None,
                            tags: list[str] | None = None, dry_run: bool = True) -> dict:

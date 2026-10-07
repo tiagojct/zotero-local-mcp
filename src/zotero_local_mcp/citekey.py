@@ -1,9 +1,11 @@
 """Citation keys in the form jacinto2026, jacinto2026a, jacinto2026b.
 
 Base key: surname of the first author (editor if there is no author, else the
-first creator), lower case, accents removed, only a-z and 0-9, plus the
+first creator; with no creator, the first main word of the title), lower case, accents removed, only a-z and 0-9, plus the
 four-digit year ("nd" when there is no year). Institutional names are joined
-("World Health Organization" -> worldhealthorganization).
+("World Health Organization" -> worldhealthorganization); a long one keeps the
+part before a comma and its first three main words ("European Commission,
+Directorate-General for Research" -> europeancommission).
 
 Where the key is stored: in the native 'citationKey' field when the item
 JSON has one, otherwise as a 'Citation Key: ...' line in Extra. Better BibTeX
@@ -41,11 +43,26 @@ def first_creator_name(data: dict) -> str:
     return ""
 
 
+SMALL = {"of", "for", "the", "and", "on", "in", "de", "da", "do", "das", "dos", "e", "la", "le", "der", "und", "für"}
+
+
+def institution_slug(name: str) -> str:
+    """worldhealthorganization; for long names the part before a comma, first three main words."""
+    head = name.split(",")[0]
+    words = [w for w in re.split(r"[\s/–—-]+", head) if w and w.lower() not in SMALL]
+    return slug("".join(words[:3]))
+
+
 def base_key(data: dict) -> str:
-    name = slug(first_creator_name(data))
+    creators = data.get("creators") or []
+    one = next((c for role in ("author", "editor", None) for c in creators
+                if role is None or c.get("creatorType") == role), {})
+    name = slug(one.get("lastName") or "") or institution_slug(one.get("name") or "")
     if not name:
-        words = [w for w in re.split(r"\s+", data.get("title") or "") if w]
-        name = slug(words[0]) if words else "anon"
+        # No creator: the first main word of the title ("The Economist" -> economist).
+        words = [w for w in re.split(r"\s+", data.get("title") or "") if slug(w)]
+        main = [w for w in words if w.lower() not in SMALL | {"a", "an", "o", "os", "as", "um", "uma"}]
+        name = slug((main or words or ["anon"])[0])
     return f"{name or 'anon'}{year_of(data) or 'nd'}"
 
 

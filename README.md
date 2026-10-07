@@ -19,6 +19,7 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 - No DELETE requests. Items go to the trash.
 - The researcher's library client refuses every write except creating a new child note (attach_note: a short summary plus an obsidian:// link, journaled, undone by the librarian). Works it proposes go to an import queue note that a person ticks; the librarian imports the ticked lines. Queue labels are sanitised so they cannot create or tick lines.
 - Duplicate detection by title needs the same year and first author, and no conflicting DOI/PMID. find_duplicates also finds titles cut off during import, shows the evidence for each item, and says when the item types differ (Zotero's Duplicate Items view shows only items of the same type).
+- Files and notes without a parent item: standalone_items lists them (find_items covers regular items only and says so when asked for attachments or notes). set_parent_items puts each under an existing item, a new item from a DOI, PMID or ISBN, or a new item from fields (a magazine article, for example); an item already in the library is used instead of a copy. The new item takes the file's collections. One journal entry; undo makes the files top-level again in their collections and moves the new items to the trash. find_reference searches Crossref, Google Books, Internet Archive, Open Library and Wikidata; web_search uses Brave Search when a key is set.
 - Tag limits per facet come from the vocabulary (`max_per_facet: topic=4, type=2`); tag_items skips a change that would go over. `replace` makes the given tags the complete set for those facets. write_tag_review writes a review note (a table of proposed tags, checked against the vocabulary, never overwriting a note); apply_tag_review applies the edited note exactly, removes the review marker, lists items whose tags changed after the note was written, and refuses a note that was already applied unless `again=true`.
 
 ## Tools
@@ -32,7 +33,8 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 | list_collections, history | create_note, trash_items, undo | check_manuscript |
 | audit_metadata, find_duplicates | import_identifiers, import_queue | export_bibliography |
 | check_retractions, missing_pdfs | repair_metadata, attach_oa_pdfs | queue_imports, attach_note |
-| tag_audit | write_tag_review, apply_tag_review | |
+| tag_audit, standalone_items | write_tag_review, apply_tag_review | |
+| find_reference, web_search | set_parent_items | |
 
 ## Requirements
 
@@ -59,6 +61,8 @@ Settings come from environment variables or from the file named by `ZOTERO_MCP_E
 | `ZOTERO_ALERTS` | Saved searches (default `<vault>/Systems/Literature alerts.md`). |
 | `ZOTERO_CONTACT_EMAIL` | Required by Unpaywall; sent to Crossref, OpenAlex and NCBI for polite use. |
 | `NCBI_API_KEY`, `OPENALEX_API_KEY` | Optional higher rate limits. |
+| `BRAVE_API_KEY` | Optional: web_search through the Brave Search API. Without it web_search says it is not set up. |
+| `GOOGLE_BOOKS_API_KEY` | Optional: without it Google Books shares one daily quota among all users, which runs out. |
 | `ZOTERO_API_URL` | Default `http://127.0.0.1:23119/api`. |
 | `ZOTERO_AGENT_MARKER` | Review marker tag, default `_agent`. |
 | `ZOTERO_MCP_STATE` | Journal, write key, caches. Default `~/.local/share/zotero-local-mcp`. |

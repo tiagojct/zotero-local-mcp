@@ -29,10 +29,13 @@ file with facets topic/, method/, type/, status/. Workflow rules:
 - Every applied write is journaled; use history and undo to revert.
 - The first write opens a Zotero dialog; the user should choose 'Always Allow'.
 - Imports, repairs and PDFs use Crossref, PubMed, Open Library and Unpaywall
-  metadata. Keywords and MeSH headings are never imported as tags.
+  metadata. Files and notes without a parent item: standalone_items, then
+  set_parent_items (find_reference and web_search help to identify them).
+  Keywords and MeSH headings are never imported as tags.
 """
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+LOOKUP = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True,
                         openWorldHint=False)
 
@@ -52,8 +55,33 @@ def librarian() -> Librarian:
     global _librarian
     if _librarian is None:
         s = lib().s
-        _librarian = Librarian(lib(), External(s.email, s.ncbi_api_key, s.openalex_api_key))
+        _librarian = Librarian(lib(), External(s.email, s.ncbi_api_key, s.openalex_api_key,
+                                                  brave_api_key=s.brave_api_key,
+                                                  google_books_api_key=s.google_books_api_key))
     return _librarian
+
+
+class Creator(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lastName: str | None = Field(default=None, description="A person's surname")
+    firstName: str | None = Field(default=None, description="A person's given names")
+    name: str | None = Field(default=None, description=(
+        "Only for an organisation, e.g. World Health Organization. A person always gets lastName and firstName."))
+    creatorType: str = "author"
+
+
+class ParentChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    child_key: str = Field(description="Key of the file or note without a parent item")
+    parent_key: str | None = Field(default=None, description="An item already in the library")
+    identifier: str | None = Field(default=None, description="DOI, pmid:123 or isbn:978...")
+    item_type: str | None = Field(default=None, description=(
+        "With fields: the Zotero item type, e.g. magazineArticle, newspaperArticle, book, "
+        "bookSection, report, document, webpage, thesis, presentation"))
+    fields: dict[str, Any] | None = Field(default=None, description=(
+        "With item_type: Zotero fields for a new item, e.g. title, publicationTitle, date, "
+        "issue, volume, pages, publisher, place, ISSN, ISBN, url, language, abstractNote"))
+    creators: list[Creator] | None = None
 
 
 class TagChange(BaseModel):
@@ -123,6 +151,14 @@ async def find_items(
     For missing_facet or untagged batches, keep offset=0: tagged items drop out of the results."""
     return await lib().find(query, fulltext, collection, tags, item_type, missing_facet,
                             untagged, outside_vocabulary, detail, limit, offset)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def standalone_items(kind: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+    """Files and notes that have no parent item (find_items does not list them), oldest first.
+    kind: 'attachment' or 'note' (empty: both). Read a file with get_fulltext(key)."""
+    return await lib().standalone_items(kind, limit, offset)
 
 
 @mcp.tool(annotations=READ)
@@ -325,6 +361,37 @@ async def import_identifiers(identifiers: list[str], collection_key: str | None 
     ISBN or title and year). New items get a citekey, the review marker and the given
     vocabulary tags, optionally a collection. No keywords or MeSH tags are imported."""
     return await librarian().import_identifiers(identifiers, collection_key, tags, dry_run)
+
+
+@mcp.tool(annotations=WRITE)
+@safe
+async def set_parent_items(changes: list[ParentChange], dry_run: bool = True) -> dict:
+    """Give files and notes without a parent item a parent (up to 25 per call). For each,
+    exactly one of: parent_key (an item already in the library), identifier (DOI, PMID or ISBN:
+    the record comes from Crossref, PubMed or Open Library), or item_type + fields (+ creators)
+    for a new item, e.g. a magazine article. An item that is already in the library is used
+    instead of a new copy. New items get a citekey, the review marker and the file's
+    collections. Undo makes the files top-level again and moves new items to the trash."""
+    return await librarian().set_parent_items([c.model_dump() for c in changes], dry_run)
+
+
+@mcp.tool(annotations=LOOKUP)
+@safe
+async def find_reference(query: str, sources: list[str] | None = None, rows: int = 5) -> dict:
+    """Find the reference for a document: a title, a magazine name and issue, a book or a
+    report. Searches Crossref, Google Books (books and magazine issues), Internet Archive
+    (scanned magazines, books, reports), Open Library (books) and Wikidata (magazines,
+    newspapers, publishers, with ISSN). sources: any of crossref, google_books,
+    internet_archive, open_library, wikidata (default: all). The query is sent to these services."""
+    return await librarian().find_reference(query, sources, rows)
+
+
+@mcp.tool(annotations=LOOKUP)
+@safe
+async def web_search(query: str, count: int = 10) -> dict:
+    """Search the web (Brave Search): title, address and snippet of each result. Only when the
+    user has saved a Brave Search key. The query is sent to Brave; never put private text in it."""
+    return await librarian().web_search(query, count)
 
 
 @mcp.tool(annotations=WRITE)

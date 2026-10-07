@@ -277,6 +277,11 @@ class Library:
                    item_type: str | None = None, missing_facet: str | None = None,
                    untagged: bool = False, outside_vocabulary: bool = False,
                    detail: bool = False, limit: int = 50, offset: int = 0) -> dict:
+        if item_type in NON_REGULAR:
+            raise ZoteroError(
+                f"find_items searches only regular items, never {item_type}s. For files and notes "
+                "without a parent item use standalone_items; for the files and notes of an item "
+                "use get_item.")
         items = await self.regular_items(collection, query, fulltext)
         want = set(tags or [])
         vocab = self.vocab.get() if outside_vocabulary else None
@@ -307,6 +312,40 @@ class Library:
             "offset": offset,
             "returned": len(page),
             "items": [self.summarize(i, detail) for i in page],
+        }
+
+    async def standalone_items(self, kind: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+        """Files and notes without a parent item (top level, not in the trash), oldest first."""
+        if kind not in (None, "attachment", "note"):
+            raise ZoteroError("kind is 'attachment', 'note' or empty for both.")
+        names = {c["key"]: c["data"]["name"] for c in await self.z.collections()}
+        rows = []
+        for i in await self.z.top_items():
+            d = i["data"]
+            t = d.get("itemType")
+            if t not in ("attachment", "note") or d.get("deleted") or d.get("parentItem"):
+                continue
+            if kind and t != kind:
+                continue
+            row: dict[str, Any] = {"key": d["key"], "type": t, "date_added": d.get("dateAdded")}
+            if t == "attachment":
+                row |= {"title": d.get("title"), "filename": d.get("filename") or d.get("path"),
+                        "content_type": d.get("contentType"), "link_mode": d.get("linkMode"),
+                        "url": d.get("url") or None}
+            else:
+                row["text"] = truncate(html_to_text(d.get("note", "")), 300)
+            row["collections"] = [names.get(c, c) for c in d.get("collections") or []]
+            row["tags"] = manual(d)
+            rows.append({k: v for k, v in row.items() if v not in (None, "", [])})
+        rows.sort(key=lambda r: r.get("date_added") or "")
+        limit = max(1, min(limit, 200))
+        page = rows[offset : offset + limit]
+        return {
+            "total": len(rows),
+            "offset": offset,
+            "returned": len(page),
+            "items": page,
+            "next": "Read a file with get_fulltext(key). Give it a parent with set_parent_items.",
         }
 
     async def get_item(self, key: str) -> dict:

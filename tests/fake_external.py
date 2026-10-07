@@ -217,10 +217,32 @@ class FakeExternal:
         if host == "api.unpaywall.org":
             doi = path[len("/v2/"):].lower()
             return js(UNPAYWALL[doi]) if doi in UNPAYWALL else js({"error": True}, 404)
-        if host == "openlibrary.org":
+        if host == "openlibrary.org" and path == "/api/books":
             key = q.get("bibkeys", "")
             isbn = key.split(":", 1)[-1]
             return js({key: OPENLIBRARY[isbn]} if isbn in OPENLIBRARY else {})
+        if host == "www.googleapis.com" and path.startswith("/books/v1/volumes"):
+            return js({"items": [{"volumeInfo": {
+                "title": "Visão", "subtitle": "n.º 1500", "publisher": "Trust in News", "publishedDate": "2022-01-13",
+                "printType": "MAGAZINE", "language": "pt", "industryIdentifiers": [{"type": "ISSN", "identifier": "0872-3540"}],
+                "infoLink": "https://books.google.com/books?id=x"}}]})
+        if host == "www.wikidata.org":
+            if q.get("action") == "wbsearchentities":
+                return js({"search": [{"id": "Q10380", "label": "Visão", "description": "Portuguese weekly news magazine",
+                                       "concepturi": "http://www.wikidata.org/entity/Q10380"}]})
+            if q.get("action") == "wbgetentities":
+                return js({"entities": {"Q10380": {"claims": {"P236": [{"mainsnak": {"datavalue": {"value": "0872-3540"}}}]}}}})
+        if host == "archive.org":
+            return js({"response": {"docs": [{"identifier": "visao-1500", "title": ["Visão n.º 1500"],
+                                              "date": "2022-01-13T00:00:00Z", "publisher": "Trust in News"}]}})
+        if host == "openlibrary.org" and path == "/search.json":
+            return js({"docs": [{"key": "/works/OL1W", "title": "Pulmonary physiology", "author_name": ["West, John B."],
+                                 "first_publish_year": 1974, "isbn": ["9780683089356"]}]})
+        if host == "api.search.brave.com":
+            if request.headers.get("X-Subscription-Token") != "brave-ok":
+                return js({"error": "bad key"}, 401)
+            return js({"web": {"results": [{"title": "Visão <strong>1500</strong>", "url": "https://visao.pt/1500",
+                                            "description": "Edição de 13 de janeiro"}]}})
         if host == "oa.example.org":
             return httpx.Response(200, content=PDF, headers={"Content-Type": "application/pdf"})
         if host == "publisher.example.org":
