@@ -947,10 +947,11 @@ class Library:
         parent = await self.z.item(parent_key)
         if not regular(parent):
             raise ZoteroError("Notes can only be attached to regular items.")
-        body = md.markdown(markdown_text, extensions=["extra", "sane_lists"])
+        # Raw HTML in the text stays text (as in attach_note): the note shows what the preview shows.
+        body = md.markdown(html.escape(markdown_text, quote=False), extensions=["extra", "sane_lists"])
         if dry_run:
             return {"dry_run": True, "parent": label(parent["data"]),
-                    "note_preview": truncate(markdown_text, 1500),
+                    "note_preview": markdown_text,
                     "next": "Nothing was written. Call again with dry_run=false after approval."}
         tags = [{"tag": self.s.marker}] if self.s.marker else []
         res = await self.z.create_items([{

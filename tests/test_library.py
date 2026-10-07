@@ -554,3 +554,11 @@ async def test_review_notes_outside_the_vault_are_refused(lib, tmp_path):
     with pytest.raises(ZoteroError) as err:
         lib._note_path(str(outside))
     assert "outside the vault" in str(err.value)
+
+
+async def test_create_note_keeps_raw_html_as_text(lib, fake):
+    preview = await lib.create_note("AAAA1111", "Hello <img src=x onerror=alert(1)> **bold**")
+    assert "<img" in preview["note_preview"]  # shown whole, as written
+    await lib.create_note("AAAA1111", "Hello <img src=x onerror=alert(1)> **bold**", dry_run=False)
+    note = next(i for i in fake.items.values() if i.get("itemType") == "note" and "Hello" in i.get("note", ""))
+    assert "<img" not in note["note"] and "&lt;img" in note["note"] and "<strong>bold</strong>" in note["note"]
