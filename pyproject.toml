@@ -1,6 +1,6 @@
 [project]
 name = "zotero-local-mcp"
-version = "0.5.5"
+version = "0.6.0"
 description = "Zotero 10 librarian and research assistant MCP servers (local API, PubMed, OpenAlex, Crossref)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,7 @@ dependencies = [
     "mcp>=2.2,<3",
     "httpx>=0.27",
     "markdown>=3.6",
+    "pypdfium2>=4.30",
 ]
 
 [project.urls]

@@ -178,6 +178,18 @@ async def get_fulltext(key: str, offset: int = 0, max_chars: int = 30000) -> dic
     return await lib().get_fulltext(key, offset, max_chars)
 
 
+@mcp.tool(annotations=WRITE)
+@safe
+async def get_figure(key: str, label: str) -> dict:
+    """Cut a figure or table out of the item's PDF as a PNG image in Literature/figures/ of the
+    Sub-Sub folder, to show it in a note. label: as the caption prints it, e.g. "Figure 2" or
+    "Table 1". Returns the image path, the PDF page, the caption, a Markdown line to put in a
+    note in Literature/, and a zotero:// link to the page. method "page" means that the figure
+    could not be cut out, so the whole page was taken: say so in the note. Changes nothing in
+    the library."""
+    return await lib().get_figure(key, label)
+
+
 @mcp.tool(annotations=READ)
 @safe
 async def list_tags(

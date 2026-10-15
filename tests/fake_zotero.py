@@ -8,6 +8,7 @@ collections, and multi-object POST writes with per-object version checks.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -89,7 +90,9 @@ class FakeZotero:
     # ------------------------------------------------------------ plumbing
 
     def _wrap(self, data: dict) -> dict:
-        return {"key": data["key"], "version": data["version"], "library": {}, "links": {},
+        # An attachment's file on this computer, as the local API gives it.
+        links = {"enclosure": {"href": Path(data["_file"]).as_uri(), "type": "application/pdf"}} if data.get("_file") else {}
+        return {"key": data["key"], "version": data["version"], "library": {}, "links": links,
                 "meta": {}, "data": json.loads(json.dumps(data))}
 
     def handle(self, method: str, url: str, headers: dict[str, str], body: bytes):

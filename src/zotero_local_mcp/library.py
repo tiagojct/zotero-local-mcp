@@ -13,6 +13,7 @@ Tag operations cover top-level regular items (not notes, attachments or annotati
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 
 import html
@@ -20,9 +21,12 @@ import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import markdown as md
 
+from . import figures
 from .citekey import base_key, current_key, first_creator_name, unique_key, with_key, year_of
 from .client import LocalZotero, ZoteroError
 from .config import Settings
@@ -409,6 +413,36 @@ class Library:
             "downloads it, then right-click the attachment and choose Reindex Item."
             if atts else "This item has no attachment."
         )
+
+    async def get_figure(self, key: str, label: str) -> dict:
+        """A figure or table of the item's PDF, cut out as a PNG in Literature/figures/ of the vault."""
+        if not self.s.vault:
+            raise ZoteroError("No Sub-Sub folder (ZOTERO_VAULT) is set, so there is nowhere to save the image.")
+        item = await self.z.item(key)
+        if item["data"].get("itemType") == "attachment":
+            parent = item["data"].get("parentItem")
+            owner, atts = (await self.z.item(parent) if parent else item), [item]
+        else:
+            owner, atts = item, await self.z.children(key)
+        pdfs = [a for a in atts if a["data"].get("contentType") == "application/pdf"]
+        if not pdfs:
+            raise ZoteroError("This item has no PDF.")
+        att = pdfs[0]
+        href = ((att.get("links") or {}).get("enclosure") or {}).get("href", "")
+        path = Path(url2pathname(urlparse(href).path)) if href.startswith("file:") else None
+        if not path or not path.exists():
+            raise ZoteroError("The PDF is not on this computer yet. Open it once in Zotero so that it downloads, then try again.")
+        kind, number = figures.parse_label(label)
+        name = re.sub(r"[^\w-]+", "-", current_key(owner["data"]) or owner["key"]).strip("-")
+        rel = f"Literature/figures/{name}-{kind}-{number}.png"
+        out = await asyncio.to_thread(figures.extract, path, label, self.s.vault / rel)
+        alt = re.sub(r"[\[\]\n]+", " ", out["caption"])[:150]
+        return {
+            "key": owner["key"], "attachment": att["key"], "label": label, "image": rel, **out,
+            # From a note in Literature/, the image is in figures/.
+            "markdown": f"![{alt}](figures/{rel.rsplit('/', 1)[1]})",
+            "pdf_link": f"zotero://open-pdf/library/items/{att['key']}?page={out['page']}",
+        }
 
     async def list_tags(self, facet: str | None = None, outside_vocabulary: bool = False,
                         include_automatic: bool = False, min_items: int = 1) -> dict:
