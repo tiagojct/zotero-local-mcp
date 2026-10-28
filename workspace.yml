@@ -1,0 +1,15 @@
+# Quarterdeck project metadata. See ~/quarterdeck/templates/project/workspace.yml for the fields.
+name: zotero-local-mcp
+category: tools
+type: other
+status: active
+build: actions
+deploy_target: external
+deploy_method: GitHub releases
+url: ""
+host: ""
+build_command: ""
+artifact: other
+remote_path: ""
+service: ""
+checks: []
