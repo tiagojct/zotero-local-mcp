@@ -141,16 +141,20 @@ async def find_items(
     detail: bool = False,
     limit: int = 50,
     offset: int = 0,
+    queries: list[str] | None = None,
 ) -> dict:
     """Search top-level items (newest first). Filters combine.
     query: title/creator/year search (fulltext=true searches all fields and PDFs).
+    queries: several searches at once, merged (the user's words first, then synonyms and other
+    word forms). Each item then has found_by (q1, q2...), the result has queries (q1 -> text) and
+    only_other_queries (items that q1, the user's words, did not find).
     collection: collection key. tags: items must have all of these tags. item_type: e.g. journalArticle, book.
     missing_facet: items with no tag of that facet, e.g. 'topic'.
     untagged: items with no manual tags. outside_vocabulary: items with tags not in the vocabulary.
     detail=true adds abstract, venue, DOI and automatic tags (use it when proposing tags).
     For missing_facet or untagged batches, keep offset=0: tagged items drop out of the results."""
     return await lib().find(query, fulltext, collection, tags, item_type, missing_facet,
-                            untagged, outside_vocabulary, detail, limit, offset)
+                            untagged, outside_vocabulary, detail, limit, offset, queries)
 
 
 @mcp.tool(annotations=READ)

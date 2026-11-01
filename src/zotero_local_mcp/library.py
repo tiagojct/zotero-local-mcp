@@ -280,13 +280,29 @@ class Library:
                    collection: str | None = None, tags: list[str] | None = None,
                    item_type: str | None = None, missing_facet: str | None = None,
                    untagged: bool = False, outside_vocabulary: bool = False,
-                   detail: bool = False, limit: int = 50, offset: int = 0) -> dict:
+                   detail: bool = False, limit: int = 50, offset: int = 0,
+                   queries: list[str] | None = None) -> dict:
         if item_type in NON_REGULAR:
             raise ZoteroError(
                 f"find_items searches only regular items, never {item_type}s. For files and notes "
                 "without a parent item use standalone_items; for the files and notes of an item "
                 "use get_item.")
-        items = await self.regular_items(collection, query, fulltext)
+        texts: list[str] = []
+        for t in ([query] if query else []) + list(queries or []):
+            t = (t or "").strip()
+            if t and t.lower() not in {x.lower() for x in texts}:
+                texts.append(t)
+        found_by: dict[str, list[str]] = {}
+        if queries and texts:
+            # Several queries: one search each, merged on the key, with the queries that found each item.
+            merged: dict[str, dict] = {}
+            for n, text in enumerate(texts, 1):
+                for i in await self.regular_items(collection, text, fulltext):
+                    merged.setdefault(i["key"], i)
+                    found_by.setdefault(i["key"], []).append(f"q{n}")
+            items = list(merged.values())
+        else:
+            items = await self.regular_items(collection, query, fulltext)
         want = set(tags or [])
         vocab = self.vocab.get() if outside_vocabulary else None
         if outside_vocabulary and vocab is None:
@@ -311,12 +327,18 @@ class Library:
                       key=lambda i: i["data"].get("dateAdded", ""), reverse=True)
         limit = max(1, min(limit, 200))
         page = hits[offset : offset + limit]
-        return {
+        out: dict[str, Any] = {
             "total": len(hits),
             "offset": offset,
             "returned": len(page),
             "items": [self.summarize(i, detail) for i in page],
         }
+        if found_by:
+            for row in out["items"]:
+                row["found_by"] = found_by[row["key"]]
+            out["queries"] = {f"q{n}": t for n, t in enumerate(texts, 1)}
+            out["only_other_queries"] = sum(1 for i in hits if "q1" not in found_by[i["key"]])
+        return out
 
     async def standalone_items(self, kind: str | None = None, limit: int = 50, offset: int = 0) -> dict:
         """Files and notes without a parent item (top level, not in the trash), oldest first."""

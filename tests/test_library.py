@@ -40,6 +40,21 @@ async def test_find_filters(lib):
     assert (await lib.find(query="asthma"))["total"] == 1
 
 
+async def test_find_with_several_queries_says_which_found_each(lib):
+    res = await lib.find(queries=["spirometry", "lung function", "asthma"])
+    assert res["queries"] == {"q1": "spirometry", "q2": "lung function", "q3": "asthma"}
+    by = {i["key"]: i["found_by"] for i in res["items"]}
+    assert by == {"AAAA1111": ["q1"], "DDDD4444": ["q2"], "BBBB2222": ["q3"]}
+    assert res["total"] == 3 and res["only_other_queries"] == 2
+    # query and queries together: query is q1; repeated queries are searched once
+    both = await lib.find(query="spirometry", queries=["Spirometry", "asthma"])
+    assert both["queries"] == {"q1": "spirometry", "q2": "asthma"}
+    # filters still apply after the merge
+    assert (await lib.find(queries=["spirometry", "asthma"], untagged=True))["total"] == 1
+    # one query: no found_by, as before
+    assert "found_by" not in (await lib.find(query="asthma"))["items"][0]
+
+
 async def test_get_item_and_tags(lib):
     item = await lib.get_item("BBBB2222")
     assert item["notes"][0]["text"] == "My note"
