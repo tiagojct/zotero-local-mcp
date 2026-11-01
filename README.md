@@ -35,7 +35,9 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 | check_retractions, missing_pdfs | repair_metadata, attach_oa_pdfs | queue_imports, attach_note |
 | tag_audit, standalone_items | write_tag_review, apply_tag_review | |
 | find_reference, web_search | set_parent_items | |
-| get_figure | | |
+| get_figure, list_libraries | | |
+
+Group libraries are read-only. `list_libraries` lists the user's library ("user") and the groups in this Zotero ("group:<id>"). The read tools (find_items, get_item, get_fulltext, get_figure, standalone_items, library_overview, list_tags, list_collections, find_duplicates, check_retractions) take `library="group:<id>"`; their zotero:// links then point into the group. The write tools have no library argument, and the client refuses a write while a group is being read.
 
 `get_figure` cuts a figure or table out of an item's PDF and saves it as a PNG in `Literature/figures/` of the vault, for a note. The caption is the anchor ("Figure 2.", "Table 1:"): a figure is the graphics next to its caption, a table runs between its rules. When neither can be found, it takes the whole page and says so. It reads the PDF on this computer with pypdfium2 and changes nothing in the library.
 

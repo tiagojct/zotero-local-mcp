@@ -14,8 +14,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,44 @@ BATCH = 50  # Zotero accepts at most 50 objects per multi-object write
 
 class ZoteroError(RuntimeError):
     """Any failure that the agent should see as a plain message."""
+
+
+# The library that reads go to during one tool call: None is the user's own library, "group:<id>" a group.
+# Groups are read-only here: writes always go to the user's library, and _write refuses while a group is set.
+LIBRARY: ContextVar[str | None] = ContextVar("zotero_library", default=None)
+
+
+def library_path(library: str | None) -> str:
+    """The local API path of a library: users/0, or groups/<id> for "group:<id>" (or the bare id)."""
+    if library in (None, "", "user"):
+        return "users/0"
+    m = re.fullmatch(r"(?:group:)?(\d{1,12})", library.strip())
+    if not m:
+        raise ZoteroError(f'Unknown library "{library}". Use "user" or "group:<id>" from list_libraries.')
+    return f"groups/{m.group(1)}"
+
+
+def current_library() -> str | None:
+    """The group read in this call, as "group:<id>", or None for the user's library."""
+    path = library_path(LIBRARY.get())
+    return None if path == "users/0" else f"group:{path.split('/')[1]}"
+
+
+def link_scope() -> str:
+    """The library part of a zotero:// link: "library" for the user's, "groups/<id>" for a group."""
+    lib = current_library()
+    return "library" if lib is None else f"groups/{lib.split(':')[1]}"
+
+
+@contextmanager
+def in_library(library: str | None) -> Iterator[None]:
+    """Read from `library` for the length of the block."""
+    library_path(library)  # refuse a wrong name before anything is read
+    token = LIBRARY.set(library or None)
+    try:
+        yield
+    finally:
+        LIBRARY.reset(token)
 
 
 class WriteResult:
@@ -196,7 +238,7 @@ class LocalZotero:
             return path
         if path.startswith("/"):
             return f"{self.base}{path}"
-        return f"{self.prefix}/{path}"
+        return f"{self.base}/{library_path(LIBRARY.get())}/{path}"
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> httpx.Response:
         await self._ensure()
@@ -233,6 +275,9 @@ class LocalZotero:
         raw: bytes | None = None,
         content_type: str = "application/json",
     ) -> httpx.Response:
+        if current_library() is not None:
+            raise ZoteroError(
+                "Group libraries are read-only in Sub-Sub: change items of a group in the Zotero window.")
         await self._ensure()
         content = raw if raw is not None else json.dumps(body).encode()
         for attempt in range(2):

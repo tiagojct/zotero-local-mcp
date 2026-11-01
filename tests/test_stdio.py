@@ -35,6 +35,12 @@ async def test_stdio_roundtrip(fake, tmp_path):
             tools = {t.name: t for t in (await s.list_tools()).tools}
             assert {"tag_items", "find_items", "undo", "set_citekeys", "trash_items"} <= set(tools)
             assert tools["find_items"].annotations.read_only_hint is True
+            assert tools["list_libraries"].annotations.read_only_hint is True
+            # Read tools take a library; write tools do not (groups are read-only)
+            assert "library" in tools["find_items"].input_schema["properties"]
+            assert "library" not in tools["tag_items"].input_schema["properties"]
+            bad = await s.call_tool("find_items", {"query": "x", "library": "../users/1"})
+            assert bad.is_error and "Unknown library" in bad.content[0].text
             schema = tools["tag_items"].input_schema
             assert schema["properties"]["dry_run"]["default"] is True
 

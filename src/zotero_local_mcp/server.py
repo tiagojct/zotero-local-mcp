@@ -11,7 +11,7 @@ from mcp_types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
-from .client import ZoteroError
+from .client import ZoteroError, in_library
 from .config import Settings
 from .external import External, ExternalError
 from .library import Library
@@ -121,10 +121,20 @@ async def status() -> dict:
 
 @mcp.tool(annotations=READ)
 @safe
-async def library_overview() -> dict:
+async def library_overview(library: str | None = None) -> dict:
     """Counts for the whole library: items by type, items missing each facet, items without
-    tags, tags outside the vocabulary, items without citekeys, items awaiting review."""
-    return await lib().overview()
+    tags, tags outside the vocabulary, items without citekeys, items awaiting review.
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await lib().overview()
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def list_libraries() -> dict:
+    """The libraries in this Zotero: the user's own ("user", which Sub-Sub can change) and the
+    group libraries ("group:<id>", read-only: search and read them with library="group:<id>")."""
+    return await lib().list_libraries()
 
 
 @mcp.tool(annotations=READ)
@@ -142,56 +152,69 @@ async def find_items(
     limit: int = 50,
     offset: int = 0,
     queries: list[str] | None = None,
+    library: str | None = None,
 ) -> dict:
     """Search top-level items (newest first). Filters combine.
     query: title/creator/year search (fulltext=true searches all fields and PDFs).
     queries: several searches at once, merged (the user's words first, then synonyms and other
     word forms). Each item then has found_by (q1, q2...), the result has queries (q1 -> text) and
     only_other_queries (items that q1, the user's words, did not find).
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only.
     collection: collection key. tags: items must have all of these tags. item_type: e.g. journalArticle, book.
     missing_facet: items with no tag of that facet, e.g. 'topic'.
     untagged: items with no manual tags. outside_vocabulary: items with tags not in the vocabulary.
     detail=true adds abstract, venue, DOI and automatic tags (use it when proposing tags).
     For missing_facet or untagged batches, keep offset=0: tagged items drop out of the results."""
-    return await lib().find(query, fulltext, collection, tags, item_type, missing_facet,
-                            untagged, outside_vocabulary, detail, limit, offset, queries)
+    with in_library(library):
+        return await lib().find(query, fulltext, collection, tags, item_type, missing_facet,
+                                untagged, outside_vocabulary, detail, limit, offset, queries)
 
 
 @mcp.tool(annotations=READ)
 @safe
-async def standalone_items(kind: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+async def standalone_items(kind: str | None = None, limit: int = 50, offset: int = 0,
+                           library: str | None = None) -> dict:
     """Files and notes that have no parent item (find_items does not list them), oldest first.
-    kind: 'attachment' or 'note' (empty: both). Read a file with get_fulltext(key)."""
-    return await lib().standalone_items(kind, limit, offset)
+    kind: 'attachment' or 'note' (empty: both). Read a file with get_fulltext(key).
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await lib().standalone_items(kind, limit, offset)
 
 
 @mcp.tool(annotations=READ)
 @safe
-async def get_item(key: str) -> dict:
+async def get_item(key: str, library: str | None = None) -> dict:
     """Full record of one item: fields, all tags, collections, child notes (as text),
-    attachments and a zotero:// link."""
-    return await lib().get_item(key)
+    attachments and a zotero:// link.
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await lib().get_item(key)
 
 
 @mcp.tool(annotations=READ)
 @safe
-async def get_fulltext(key: str, offset: int = 0, max_chars: int = 30000) -> dict:
+async def get_fulltext(key: str, offset: int = 0, max_chars: int = 30000,
+                       library: str | None = None) -> dict:
     """Full text that Zotero indexed from the item's PDF (key of the item or the attachment).
     Long texts come in parts: call again with offset=next_offset until next_offset is null.
-    Use it for literature notes and syntheses; it costs many tokens, so read only what is needed."""
-    return await lib().get_fulltext(key, offset, max_chars)
+    Use it for literature notes and syntheses; it costs many tokens, so read only what is needed.
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await lib().get_fulltext(key, offset, max_chars)
 
 
 @mcp.tool(annotations=WRITE)
 @safe
-async def get_figure(key: str, label: str) -> dict:
+async def get_figure(key: str, label: str, library: str | None = None) -> dict:
     """Cut a figure or table out of the item's PDF as a PNG image in Literature/figures/ of the
     Sub-Sub folder, to show it in a note. label: as the caption prints it, e.g. "Figure 2" or
     "Table 1". Returns the image path, the PDF page, the caption, a Markdown line to put in a
     note in Literature/, and a zotero:// link to the page. method "page" means that the figure
     could not be cut out, so the whole page was taken: say so in the note. Changes nothing in
-    the library."""
-    return await lib().get_figure(key, label)
+    the library.
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await lib().get_figure(key, label)
 
 
 @mcp.tool(annotations=READ)
@@ -201,11 +224,14 @@ async def list_tags(
     outside_vocabulary: bool = False,
     include_automatic: bool = False,
     min_items: int = 1,
+    library: str | None = None,
 ) -> dict:
     """Tags used on top-level items with item counts, most used first.
     facet: only tags like 'topic/...'. outside_vocabulary: only tags missing from the vocabulary.
-    include_automatic: also list automatic tags (e.g. MeSH imported from PubMed)."""
-    return await lib().list_tags(facet, outside_vocabulary, include_automatic, min_items)
+    include_automatic: also list automatic tags (e.g. MeSH imported from PubMed).
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await lib().list_tags(facet, outside_vocabulary, include_automatic, min_items)
 
 
 @mcp.tool(annotations=READ)
@@ -218,9 +244,11 @@ async def get_vocabulary() -> dict:
 
 @mcp.tool(annotations=READ)
 @safe
-async def list_collections() -> list[dict]:
-    """All collections with key, name, parent name and item count."""
-    return await lib().list_collections()
+async def list_collections(library: str | None = None) -> list[dict]:
+    """All collections with key, name, parent name and item count.
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await lib().list_collections()
 
 
 @mcp.tool(annotations=READ)
@@ -442,23 +470,27 @@ async def repair_metadata(keys: list[str], overwrite: bool = False, min_confiden
 
 @mcp.tool(annotations=READ)
 @safe
-async def find_duplicates() -> dict:
+async def find_duplicates(library: str | None = None) -> dict:
     """Groups of likely duplicate items: same DOI, PMID or ISBN; same title, year and first
     author; or a title cut off during import (one title is the start of the other). Each item
     comes with evidence (type, DOI, abstract, child items, filled fields, citekey), the fullest
     record, and notes when the item types differ (Zotero's own Duplicate Items view misses
-    those) or the citekeys differ. Merging is done by the user in Zotero."""
-    return await librarian().duplicates()
+    those) or the citekeys differ. Merging is done by the user in Zotero.
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await librarian().duplicates()
 
 
 @mcp.tool(annotations=READ)
 @safe
 async def check_retractions(keys: list[str] | None = None, refresh: bool = False,
-                            limit: int = 200) -> dict:
+                            limit: int = 200, library: str | None = None) -> dict:
     """Check items with a DOI for retractions, expressions of concern and corrections
     (Crossref, including Retraction Watch data). Results are cached for 30 days; call again
-    while still_unchecked > 0."""
-    return await librarian().retractions(keys, refresh, limit)
+    while still_unchecked > 0.
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await librarian().retractions(keys, refresh, limit)
 
 
 @mcp.tool(annotations=READ)

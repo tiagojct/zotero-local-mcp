@@ -28,7 +28,7 @@ import markdown as md
 
 from . import figures
 from .citekey import base_key, current_key, first_creator_name, unique_key, with_key, year_of
-from .client import LocalZotero, ZoteroError
+from .client import LocalZotero, ZoteroError, current_library, link_scope
 from .config import Settings
 from .journal import Journal
 from .vocab import VocabularyStore, facet_of
@@ -245,6 +245,14 @@ class Library:
         out["contact_email_set"] = bool(self.s.email)
         return out
 
+    async def list_libraries(self) -> dict:
+        """The user's library and the groups in this Zotero. Groups can be read, not changed."""
+        groups = await self.z.get_json("/users/0/groups")
+        return {"libraries": [{"library": "user", "name": "My Library", "writable": True}] + [
+            {"library": f"group:{g['id']}", "name": (g.get("data") or {}).get("name") or str(g["id"]),
+             "writable": False}
+            for g in groups]}
+
     async def overview(self) -> dict:
         items = await self.regular_items()
         vocab = self.vocab.get()
@@ -333,6 +341,8 @@ class Library:
             "returned": len(page),
             "items": [self.summarize(i, detail) for i in page],
         }
+        if (group := current_library()) is not None:
+            out["library"] = group
         if found_by:
             for row in out["items"]:
                 row["found_by"] = found_by[row["key"]]
@@ -386,7 +396,7 @@ class Library:
         }
         names = {c["key"]: c["data"]["name"] for c in await self.z.collections()}
         out["collections"] = [{"key": c, "name": names.get(c, "?")} for c in d.get("collections") or []]
-        out["zotero_link"] = f"zotero://select/library/items/{key}"
+        out["zotero_link"] = f"zotero://select/{link_scope()}/items/{key}"
         notes, files = [], []
         if regular(item):
             for c in await self.z.children(key):
@@ -463,7 +473,7 @@ class Library:
             "key": owner["key"], "attachment": att["key"], "label": label, "image": rel, **out,
             # From a note in Literature/, the image is in figures/.
             "markdown": f"![{alt}](figures/{rel.rsplit('/', 1)[1]})",
-            "pdf_link": f"zotero://open-pdf/library/items/{att['key']}?page={out['page']}",
+            "pdf_link": f"zotero://open-pdf/{link_scope()}/items/{att['key']}?page={out['page']}",
         }
 
     async def list_tags(self, facet: str | None = None, outside_vocabulary: bool = False,

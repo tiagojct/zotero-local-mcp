@@ -60,6 +60,14 @@ class FakeZotero:
         self.web_template_requests = 0
         self.uploads: dict[str, dict] = {}
         self.files: dict[str, bytes] = {}
+        self.groups: dict[int, tuple[str, "FakeZotero"]] = {}  # group id -> (name, its own library)
+
+    def add_group(self, group_id: int, name: str) -> "FakeZotero":
+        """A group library: its own items, served at /api/groups/<id>/ by the same Zotero."""
+        g = FakeZotero()
+        g.server_id, g.keys = self.server_id, self.keys
+        self.groups[group_id] = (name, g)
+        return g
 
     # ------------------------------------------------------------ fixtures
 
@@ -146,6 +154,16 @@ class FakeZotero:
             key = secrets.token_hex(16)
             self.keys[key] = self.remember
             return resp(200, {"key": key, "remember": self.remember})
+        if path == "/api/users/0/groups" and method == "GET":
+            return resp(200, [{"id": gid, "version": 1, "data": {"id": gid, "name": name, "type": "Private"}}
+                              for gid, (name, _g) in self.groups.items()])
+        if path.startswith("/api/groups/"):
+            gid_text, _, rest_g = path[len("/api/groups/"):].partition("/")
+            if not gid_text.isdigit() or int(gid_text) not in self.groups:
+                return resp(404, {"error": "group not found"})
+            g = self.groups[int(gid_text)][1]
+            g.seen_headers = self.seen_headers
+            return g.handle(method, url.replace(f"/api/groups/{gid_text}/", "/api/users/0/", 1), headers, body)
         prefix = "/api/users/0/"
         if not path.startswith(prefix):
             return resp(404, {"error": "not found"})
