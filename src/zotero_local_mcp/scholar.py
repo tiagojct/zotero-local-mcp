@@ -21,7 +21,7 @@ from .client import LocalZotero, ZoteroError
 from .config import Settings
 from .external import External, ExternalError, parse_jats
 from .library import Library, label, truncate
-from .records import DOI_RE, LibraryIndex, detect, fingerprint, label_of, norm_doi, zotero_to_csl
+from .records import DOI_RE, LibraryIndex, csl_to_ris, detect, fingerprint, label_of, norm_doi, rec_to_csl, zotero_to_csl
 from .screening import EXCLUDE, NO_TERMS, PASS, parse_terms, prescreen
 
 CITE_RE = re.compile(r"(?<![\w.@])-?@([A-Za-z0-9_][A-Za-z0-9_:.#$%&\-+?<>~/]*)")
@@ -473,12 +473,53 @@ class Scholar:
         return {"file": str(p), "citations": len(keys), "found": found, "missing": missing,
                 "dois_in_text": dois, "bibliography": bib}
 
+    async def _outside_records(self, identifiers: list[str]) -> tuple[list[dict], list[str]]:
+        """Full records of works that need not be in the library (DOI, PMID or ISBN), and what was not found."""
+        recs: list[dict] = []
+        not_found: list[str] = []
+        pmids: list[tuple[str, str]] = []
+        for ident in identifiers:
+            det = detect(ident)
+            rec = None
+            try:
+                if det is None:
+                    pass
+                elif det[0] == "pmid":
+                    pmids.append((ident, det[1]))
+                    continue
+                elif det[0] == "doi":
+                    rec = await self.ext.crossref_work(det[1]) or await self.ext.openalex_work(det[1])
+                elif det[0] == "isbn":
+                    rec = await self.ext.openlibrary_isbn(det[1])
+            except ExternalError:
+                rec = None
+            if rec:
+                recs.append(rec)
+            else:
+                not_found.append(ident)
+        if pmids:
+            try:
+                found = {r.get("pmid"): r for r in await self.ext.pubmed_fetch([p for _, p in pmids])}
+            except ExternalError:
+                found = {}
+            for ident, p in pmids:
+                if p in found:
+                    recs.append(found[p])
+                else:
+                    not_found.append(ident)
+        return recs, not_found
+
     async def export_bibliography(self, output_path: str, citekeys: list[str] | None = None,
                                   manuscript: str | None = None, collection: str | None = None,
-                                  tags: list[str] | None = None, overwrite: bool = False) -> dict:
+                                  tags: list[str] | None = None, overwrite: bool = False,
+                                  identifiers: list[str] | None = None) -> dict:
         out = Path(output_path).expanduser()
-        if out.suffix.lower() != ".json":
-            raise ZoteroError("Write CSL JSON: the output file must end in .json.")
+        fmt = {".json": "CSL JSON", ".ris": "RIS"}.get(out.suffix.lower())
+        if fmt is None:
+            raise ZoteroError("The output file must end in .json (CSL JSON, for Quarto and Pandoc) "
+                              "or .ris (RIS, for Rayyan, Covidence and EndNote).")
+        if len(identifiers or []) > 500:
+            raise ZoteroError("At most 500 identifiers in one call.")
         home = Path.home().resolve()
         if home not in out.resolve().parents:
             raise ZoteroError("The output file must be inside your home folder.")
@@ -512,9 +553,24 @@ class Scholar:
                         no_key.append({"key": it["key"], "title": it["title"]})
                 offset += 200
         entries = [zotero_to_csl(d, k) for k, d in sorted(chosen.items())]
-        out.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {"written": str(out), "entries": len(entries), "missing_citekeys": missing,
-                "items_without_citekey": no_key,
+        # Works found outside (they need not be in the library); each work once, by DOI or PMID.
+        recs, not_found = await self._outside_records(list(identifiers or []))
+        seen = {(e.get("DOI") or "").lower() for e in entries} | {str(e.get("PMID") or "") for e in entries}
+        seen.discard("")
+        for rec in recs:
+            e = rec_to_csl(rec)
+            ids = {(e.get("DOI") or "").lower(), str(e.get("PMID") or "")} - {""}
+            if ids & seen:
+                continue
+            seen |= ids
+            entries.append(e)
+        if fmt == "RIS":
+            with out.open("w", encoding="utf-8", newline="") as fh:
+                fh.write("\r\n".join(csl_to_ris(e) for e in entries))
+        else:
+            out.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
+        return {"written": str(out), "format": fmt, "entries": len(entries), "missing_citekeys": missing,
+                "not_found": not_found, "items_without_citekey": no_key,
                 "note": "Items without a citekey need the librarian (set_citekeys)." if no_key else None}
 
     # ------------------------------------------------------------ linked note in Zotero

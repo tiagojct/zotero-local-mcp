@@ -178,11 +178,15 @@ async def check_manuscript(path: str) -> dict:
 @safe
 async def export_bibliography(output_path: str, citekeys: list[str] | None = None,
                               manuscript: str | None = None, collection: str | None = None,
-                              tags: list[str] | None = None, overwrite: bool = False) -> dict:
-    """Write a CSL JSON bibliography (ids = citekeys) for Quarto/Pandoc. Sources: citekeys,
-    the citations of a manuscript, a collection key, and/or items with all given tags."""
+                              tags: list[str] | None = None, overwrite: bool = False,
+                              identifiers: list[str] | None = None) -> dict:
+    """Write a bibliography. output_path ending in .json: CSL JSON (ids = citekeys) for
+    Quarto/Pandoc; ending in .ris: RIS for Rayyan, Covidence or EndNote. Sources: citekeys,
+    the citations of a manuscript, a collection key, items with all given tags, and identifiers
+    (DOI, pmid:123 or isbn:978...) of works that need not be in the library, such as the works
+    of a search. Each work is written once; not_found lists identifiers that gave nothing."""
     return await scholar().export_bibliography(output_path, citekeys, manuscript, collection,
-                                               tags, overwrite)
+                                               tags, overwrite, identifiers)
 
 
 @mcp.tool(annotations=FILE)

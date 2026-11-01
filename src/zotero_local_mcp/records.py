@@ -294,3 +294,91 @@ def zotero_to_csl(data: dict, citekey: str) -> dict:
     if parts:
         out["issued"] = {"date-parts": [parts]}
     return out
+
+
+# ---------------------------------------------------------------- outside works and RIS
+
+REC_CSL_TYPE = {
+    "journal-article": "article-journal", "book": "book", "book-chapter": "chapter",
+    "proceedings-article": "paper-conference", "preprint": "article", "posted-content": "article",
+    "report": "report", "dissertation": "thesis", "dataset": "dataset", "monograph": "book",
+}
+
+
+def rec_to_csl(rec: dict) -> dict:
+    """A record from Crossref, PubMed, OpenAlex or Open Library (external.py) as CSL JSON."""
+    doi, pmid = rec.get("doi") or "", rec.get("pmid") or ""
+    out: dict[str, Any] = {"id": doi or (f"pmid:{pmid}" if pmid else rec.get("title", "")[:40]),
+                           "type": REC_CSL_TYPE.get(rec.get("kind") or "", "article-journal")}
+    for a in rec.get("authors") or []:
+        if isinstance(a, str):
+            name = {"literal": a}
+        elif a.get("family"):
+            name = {"family": a["family"], "given": a.get("given", "")}
+        elif a.get("name"):
+            name = {"literal": a["name"]}
+        else:
+            continue
+        out.setdefault("editor" if isinstance(a, dict) and a.get("role") == "editor" else "author", []).append(name)
+    for csl, value in (
+        ("title", rec.get("title")), ("container-title", rec.get("container")),
+        ("container-title-short", rec.get("container_abbr")), ("volume", rec.get("volume")),
+        ("issue", rec.get("issue")), ("page", rec.get("pages")), ("publisher", rec.get("publisher")),
+        ("DOI", doi), ("PMID", pmid), ("ISBN", rec.get("isbn")), ("abstract", rec.get("abstract")),
+        ("URL", rec.get("url")),
+    ):
+        if value:
+            out[csl] = value
+    parts = date_parts(str(rec.get("date") or rec.get("year") or ""))
+    if parts:
+        out["issued"] = {"date-parts": [parts]}
+    return out
+
+
+RIS_TYPE = {
+    "article-journal": "JOUR", "article": "JOUR", "book": "BOOK", "chapter": "CHAP",
+    "paper-conference": "CPAPER", "report": "RPRT", "thesis": "THES", "webpage": "ELEC",
+    "article-magazine": "MGZN", "article-newspaper": "NEWS", "dataset": "DATA",
+    "entry-encyclopedia": "ENCYC",
+}
+
+
+def csl_to_ris(e: dict) -> str:
+    """One CSL JSON entry as a RIS record (for Rayyan, Covidence, EndNote and others)."""
+    lines: list[tuple[str, str]] = [("TY", RIS_TYPE.get(e.get("type", ""), "GEN"))]
+
+    def add(tag: str, value: Any) -> None:
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if text:
+            lines.append((tag, text))
+
+    add("ID", e.get("id"))
+    for role, tag in (("author", "AU"), ("editor", "ED")):
+        for n in e.get(role) or []:
+            add(tag, n.get("literal") or ", ".join(x for x in (n.get("family"), n.get("given")) if x))
+    add("TI", e.get("title"))
+    add("T2", e.get("container-title"))
+    add("J2", e.get("container-title-short"))
+    parts = ((e.get("issued") or {}).get("date-parts") or [[]])[0]
+    if parts:
+        add("PY", parts[0])
+        add("DA", "/".join([str(parts[0])] + [f"{p:02d}" for p in parts[1:]]) + "/" * (3 - len(parts) + 1))
+    add("VL", e.get("volume"))
+    add("IS", e.get("issue"))
+    page = str(e.get("page") or "")
+    pieces = re.split(r"\s*[-–]\s*", page, maxsplit=1)
+    add("SP", pieces[0] if pieces else "")
+    if len(pieces) > 1:
+        add("EP", pieces[1])
+    add("PB", e.get("publisher"))
+    add("CY", e.get("publisher-place"))
+    add("SN", e.get("ISBN") or e.get("ISSN"))
+    add("DO", e.get("DOI"))
+    add("AN", e.get("PMID"))
+    add("UR", e.get("URL"))
+    add("LA", e.get("language"))
+    add("AB", e.get("abstract"))
+    lines.append(("ER", ""))
+    return "".join(f"{tag}  - {value}\r\n" for tag, value in lines)

@@ -296,6 +296,29 @@ async def test_manuscript_check_and_export(scholar, fake, tmp_path, monkeypatch)
         await scholar.export_bibliography("/etc/refs.json", citekeys=["west1974"])
 
 
+async def test_export_ris_from_the_library_and_outside_works(scholar, fake, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    out = await scholar.export_bibliography(
+        str(tmp_path / "works.ris"), citekeys=["west1974"],
+        identifiers=["10.1183/13993003.00001-2026", "pmid:39000002", "10.1183/13993003.00001-2026", "10.9999/none"])
+    assert out["entries"] == 3 and out["not_found"] == ["10.9999/none"] and out["format"] == "RIS"
+    text = (tmp_path / "works.ris").read_text(encoding="utf-8")
+    records = [r for r in text.split("ER  - ") if r.strip()]
+    assert len(records) == 3 and text.rstrip().endswith("ER  -")
+    book = next(r for r in records if "TY  - BOOK" in r)
+    assert "TI  - Pulmonary Physiology" in book and "PY  - 1974" in book and "ID  - west1974" in book
+    erj = next(r for r in records if "DO  - 10.1183/13993003.00001-2026" in r)
+    assert "TY  - JOUR" in erj and "AU  - Jacinto, Tiago" in erj
+    thorax = next(r for r in records if "AN  - 39000002" in r)
+    assert "SP  - 1" in thorax and "EP  - 9" in thorax and "T2  - Thorax" in thorax and "AB  - New GLI data." in thorax
+    assert all(r.lstrip().startswith("TY  - ") for r in records)
+    # CSL JSON takes outside works too
+    js = await scholar.export_bibliography(str(tmp_path / "works.json"), identifiers=["pmid:39000002"])
+    assert js["entries"] == 1 and json.loads((tmp_path / "works.json").read_text())[0]["title"].startswith("Spirometry")
+    with pytest.raises(ZoteroError, match=r"\.ris"):
+        await scholar.export_bibliography(str(tmp_path / "works.txt"), citekeys=["west1974"])
+
+
 async def test_queue_imports_then_librarian_imports(scholar, librarian, fake, vault):
     fake.items["DDDD4444"]["DOI"] = "10.1016/j.rmed.2019.05.001"
     res = await scholar.queue_imports([

@@ -3,7 +3,7 @@
 Two MCP servers for a local Zotero 10 library, plus a weekly alert script:
 
 - `zotero-local-mcp` (librarian): search and edit the library, faceted tagging with a controlled vocabulary, citekeys, imports by DOI/PMID/ISBN, metadata audit and repair, duplicates, retraction check, open-access PDFs, notes, collections, undo.
-- `zotero-scholar-mcp` (researcher): PubMed, Europe PMC and OpenAlex search with "already in library" flags, one merged search over several phrasings and all three sources, open-access full text by sections, citation graph, manuscript citation check, CSL JSON bibliographies for Quarto, import queue. It cannot write to Zotero.
+- `zotero-scholar-mcp` (researcher): PubMed, Europe PMC and OpenAlex search with "already in library" flags, one merged search over several phrasings and all three sources, open-access full text by sections, citation graph, manuscript citation check, bibliographies as CSL JSON (for Quarto) or RIS (for Rayyan, Covidence and EndNote), also of works outside the library, import queue. It cannot write to Zotero.
 - `zotero-alerts`: runs saved searches from an Obsidian note and writes new works to an Inbox note. No AI model.
 - `zotero-review`: preview or apply several tag review notes from the terminal (`zotero-review apply 13-31`: note numbers, or paths in the vault). Asks before it writes; notes already applied are left out.
 - `zotero-bakeoff`: model test for tagging. `sample` fixes 25 items and writes a reference note for your own tags; `run --model X` runs each model through `opencode run` (tools `bakeoff_items`, `bakeoff_submit`, no library writes); `score` writes precision, recall, edits needed, tokens and cost per model.
