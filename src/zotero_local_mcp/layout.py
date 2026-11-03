@@ -29,7 +29,16 @@ def layout_style(vault: Path) -> Style:
 
 
 def dir_path(vault: Path, name: str) -> Path:
-    """The path of a subfolder (given in TitleCase, e.g. "Inbox"), in the case of the style."""
+    """The path of a subfolder (given in TitleCase, e.g. "Inbox"). A folder that exists with the exact
+    name, or with the lowercase name, is used as it is. Only when neither exists, the style decides."""
+    try:
+        names = set(os.listdir(vault))
+    except OSError:
+        names = set()
+    if name in names:
+        return vault / name
+    if name.lower() in names:
+        return vault / name.lower()
     return vault / (name.lower() if layout_style(vault) == "lower" else name)
 
 

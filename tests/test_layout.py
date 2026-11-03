@@ -135,3 +135,23 @@ async def test_write_tag_review_lower(lib, tmp_path):
     res = await lib.write_tag_review("Zotero tag review 41", [{"key": "AAAA1111", "tags": ["topic/spirometry"]}])
     assert res["path"] == "inbox/zotero-tag-review-41.md"
     assert (vault / "inbox" / "zotero-tag-review-41.md").exists()
+
+
+def test_dir_path_follows_exact_folder(tmp_path):
+    (tmp_path / "Inbox").mkdir()
+    (tmp_path / "research").mkdir()
+    assert dir_path(tmp_path, "Inbox") == tmp_path / "Inbox"
+    assert dir_path(tmp_path, "Research") == tmp_path / "research"
+    assert dir_path(tmp_path, "Syntheses") == tmp_path / "syntheses"  # neither exists: the style
+
+
+async def test_bakeoff_reference_links(lib, tmp_path):
+    from zotero_local_mcp.bakeoff import Bakeoff
+    for style, inbox, ref, link in (("title", "Inbox", "Model test reference.md", "[[Zotero tags]]"),
+                                    ("lower", "inbox", "model-test-reference.md", "[[zotero-tags]]")):
+        vault = tmp_path / style
+        (vault / inbox).mkdir(parents=True)
+        lib.s = type(lib.s)(**{**lib.s.__dict__, "vault": vault, "state_dir": tmp_path / f"st-{style}"})
+        await Bakeoff(lib).make_sample(n=2)
+        text = (vault / inbox / ref).read_text(encoding="utf-8")
+        assert link in text and "{tags_link}" not in text

@@ -98,8 +98,8 @@ class Bakeoff:
         tags_link = note_name(self.s.vault, "Zotero tags")
         ref.write_text(
             f"---\ncreated: {sample['created']}\n---\n"
-            f"Reference tags for the model test (see [[Zotero MCP]]). Fill the last column with the topic/, "
-            "method/ and type/ tags you would give, separated by commas. Use only tags from [[{tags_link}]]. "
+            "Reference tags for the model test (see [[Zotero MCP]]). Fill the last column with the topic/, "
+            f"method/ and type/ tags you would give, separated by commas. Use only tags from [[{tags_link}]]. "
             "Do this before you look at the model files, so the test stays fair. Leave a row empty to skip it.\n\n"
             "| key | citekey | item | your tags |\n|---|---|---|---|\n" + rows + "\n",
             encoding="utf-8")

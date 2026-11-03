@@ -25,7 +25,9 @@ from urllib.parse import quote, unquote
 from .client import LocalZotero, ZoteroError
 from .config import Settings
 
-URI = re.compile(r"(obsidian://open\?vault=)([^&\"'<>\s]*)((?:&amp;|&)file=)([^&\"'<>\s#]*)")
+URI = re.compile(r"obsidian://open\?([^\"'<>\s#]*)")
+SEP = re.compile(r"(&amp;|&)")
+HEADER = ["old", "new", "kind", "note"]
 
 
 def nfc(text: str) -> str:
@@ -33,15 +35,21 @@ def nfc(text: str) -> str:
 
 
 def read_map(path: Path) -> dict[str, str]:
-    """old -> new from the TSV. The header row and rows without a change are left out."""
+    """old -> new from the TSV. Rows without a change are left out. The kind column is ignored.
+    A wrong header or a row with too few columns is an error."""
     plan: dict[str, str] = {}
     with open(path, encoding="utf-8", newline="") as f:
-        for i, row in enumerate(csv.reader(f, delimiter="\t")):
-            if len(row) < 2 or (i == 0 and row[0].strip() == "old"):
-                continue
-            old, new = nfc(row[0].strip()), nfc(row[1].strip())
-            if old and new and old != new:
-                plan[old] = new
+        rows = list(csv.reader(f, delimiter="\t"))
+    if not rows or [c.strip() for c in rows[0][:4]] != HEADER:
+        raise ZoteroError(f"{path}: the first row must be the header: old, new, kind, note (tab-separated).")
+    for n, row in enumerate(rows[1:], start=2):
+        if not any(c.strip() for c in row):
+            continue
+        if len(row) < 2 or not row[0].strip() or not row[1].strip():
+            raise ZoteroError(f"{path}, line {n}: old and new are needed (tab-separated).")
+        old, new = nfc(row[0].strip()), nfc(row[1].strip())
+        if old != new:
+            plan[old] = new
     return plan
 
 
@@ -50,19 +58,30 @@ def rewrite(html_text: str, plan: dict[str, str], vault: str) -> tuple[str, list
     done: list[tuple[str, str]] = []
 
     def one(m: re.Match) -> str:
-        if unquote(m.group(2)) != vault:
+        parts = SEP.split(m.group(1))  # key=value, separator, key=value, ...
+        fields = {p.split("=", 1)[0]: i for i, p in enumerate(parts) if i % 2 == 0 and "=" in p}
+        if "vault" not in fields or "file" not in fields:
             return m.group(0)
-        file = nfc(unquote(m.group(4)))
+        if unquote(parts[fields["vault"]].split("=", 1)[1]) != vault:
+            return m.group(0)
+        file = nfc(unquote(parts[fields["file"]].split("=", 1)[1]))
         has_md = file.endswith(".md")
         old_md = file if has_md else file + ".md"
         new_md = plan.get(old_md)
         if new_md is None:
             return m.group(0)
         new_file = new_md if has_md else re.sub(r"\.md$", "", new_md)
+        parts[fields["file"]] = "file=" + quote(new_file, safe="")
         done.append((old_md, new_md))
-        return m.group(1) + m.group(2) + m.group(3) + quote(new_file, safe="")
+        return "obsidian://open?" + "".join(parts)
 
     return URI.sub(one, html_text), done
+
+
+class RelinkError(ZoteroError):
+    def __init__(self, message: str, written: list[str], not_written: list[str]) -> None:
+        super().__init__(message)
+        self.written, self.not_written = written, not_written
 
 
 async def relink(z: Any, plan: dict[str, str], apply: bool = False, vault: str = "powerslave") -> list[dict]:
@@ -81,9 +100,12 @@ async def relink(z: Any, plan: dict[str, str], apply: bool = False, vault: str =
             changes.append({"key": item["key"], "old": old, "new": new})
         updates.append({"key": item["key"], "version": data.get("version", item.get("version")), "note": text})
     if apply and updates:
+        # update_items sends at most 50 objects per request and stops at the first failed request.
         res = await z.update_items(updates)
         if res.error or res.failed:
-            raise ZoteroError(f"Zotero did not save every note: {res.error or res.failed}")
+            written = [*res.succeeded, *res.unchanged]
+            not_written = [u["key"] for u in updates if u["key"] not in written]
+            raise RelinkError(f"Zotero did not save every note: {res.error or res.failed}", written, not_written)
     return changes
 
 
@@ -123,6 +145,11 @@ def main() -> None:
     args = ap.parse_args()
     try:
         sys.exit(asyncio.run(run(args.map, args.apply, vault=args.vault)))
+    except RelinkError as exc:
+        print(f"Error: {exc}")
+        print(f"Written ({len(exc.written)}): {' '.join(exc.written) or 'none'}")
+        print(f"Not written ({len(exc.not_written)}): {' '.join(exc.not_written) or 'none'}")
+        sys.exit(1)
     except (ZoteroError, OSError) as exc:
         print(f"Error: {exc}")
         sys.exit(1)
