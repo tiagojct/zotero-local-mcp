@@ -155,3 +155,38 @@ async def test_bakeoff_reference_links(lib, tmp_path):
         await Bakeoff(lib).make_sample(n=2)
         text = (vault / inbox / ref).read_text(encoding="utf-8")
         assert link in text and "{tags_link}" not in text
+
+
+def test_empty_folder_named_sub_sub_is_lower(tmp_path):
+    root = tmp_path / "sub-sub"
+    root.mkdir()
+    assert layout_style(root) == "lower"
+    assert dir_path(root, "Inbox") == root / "inbox"
+    # A folder that does not exist yet.
+    assert layout_style(tmp_path / "new" / "sub-sub") == "lower"
+    assert layout_style(tmp_path / "other") == "title"
+
+
+def test_sub_sub_with_titlecase_subfolder_is_title(tmp_path):
+    root = tmp_path / "sub-sub"
+    root.mkdir()
+    (root / "Inbox").mkdir()
+    assert layout_style(root) == "title"
+
+
+def test_settings_path_uses_existing_zotero_folder(tmp_path):
+    from zotero_local_mcp.layout import settings_path
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "zotero").mkdir()
+    assert settings_path(tmp_path, "tags") == tmp_path / "zotero" / "zotero-tags.md"
+    root = tmp_path / "sub-sub"
+    root.mkdir()
+    (root / "Zotero").mkdir()  # TitleCase folder: title style, no default for tags
+    assert settings_path(root, "tags") is None
+
+
+def test_settings_path_follows_mixed_zotero_name(tmp_path):
+    from zotero_local_mcp.layout import settings_path
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "Zotero").mkdir()
+    assert settings_path(tmp_path, "tags") == tmp_path / "Zotero" / "zotero-tags.md"

@@ -13,19 +13,26 @@ from typing import Literal
 Style = Literal["title", "lower"]
 
 LOWER_DIRS = ("inbox", "literature", "syntheses", "research", "zotero")
+TITLE_DIRS = tuple(d.capitalize() for d in LOWER_DIRS)
 GREEK = {"α": "alpha", "β": "beta", "γ": "gamma", "δ": "delta", "κ": "kappa", "μ": "mu"}
 SETTINGS_LOWER = {"tags": "zotero-tags.md", "rules": "zotero-agent.md", "alerts": "literature-alerts.md"}
 SETTINGS_TITLE = {"tags": "Zotero tags.md", "rules": "Zotero agent.md", "alerts": "Literature alerts.md"}
 
 
 def layout_style(vault: Path) -> Style:
-    """"lower" when the folder holds a subfolder with an exact lowercase name. The names come from
+    """"lower" when the folder holds a subfolder with an exact lowercase name, or has none of the
+    known subfolders and its own name is sub-sub. The names come from
     os.listdir: on macOS, Path.exists finds Inbox/ for inbox/."""
     try:
         names = set(os.listdir(vault))
     except OSError:
+        names = set()
+    if names.intersection(LOWER_DIRS):
+        return "lower"
+    if names.intersection(TITLE_DIRS):
         return "title"
-    return "lower" if names.intersection(LOWER_DIRS) else "title"
+    # No known subfolder: a folder named sub-sub (it can be new or empty) is the lower style.
+    return "lower" if Path(vault).name == "sub-sub" else "title"
 
 
 def dir_path(vault: Path, name: str) -> Path:
@@ -73,7 +80,7 @@ def settings_path(vault: Path, which: str) -> Path | None:
     """Default place of a settings file (tags, rules, alerts). Lower style: zotero/<name>. Title
     style: Systems/<name> for alerts (today's default); no default for the others."""
     if layout_style(vault) == "lower":
-        return vault / "zotero" / SETTINGS_LOWER[which]
+        return dir_path(vault, "Zotero") / SETTINGS_LOWER[which]
     if which == "alerts":
         return vault / "Systems" / SETTINGS_TITLE[which]
     return None

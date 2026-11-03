@@ -5,7 +5,8 @@
 
 PLAN.tsv has a header row "old<TAB>new<TAB>kind<TAB>note". The paths are relative to the vault
 root (the folder with .obsidian/), as in the file= part of the link that attach_note writes
-(obsidian://open?vault=<vault>&file=<path>). Only the file= value changes. Each changed note is
+(obsidian://open?vault=<vault>&file=<path>). Only the file= value changes, and vault= is set to the --vault value (the name is compared
+without case: the notes have vault=Powerslave). Each changed note is
 one line: item key, old file, new file. Zotero asks for permission to write. Zotero must be running.
 Reads the same settings as the MCP server (ZOTERO_MCP_ENV or ~/.config/zotero-local-mcp/env).
 """
@@ -62,7 +63,7 @@ def rewrite(html_text: str, plan: dict[str, str], vault: str) -> tuple[str, list
         fields = {p.split("=", 1)[0]: i for i, p in enumerate(parts) if i % 2 == 0 and "=" in p}
         if "vault" not in fields or "file" not in fields:
             return m.group(0)
-        if unquote(parts[fields["vault"]].split("=", 1)[1]) != vault:
+        if unquote(parts[fields["vault"]].split("=", 1)[1]).casefold() != vault.casefold():
             return m.group(0)
         file = nfc(unquote(parts[fields["file"]].split("=", 1)[1]))
         has_md = file.endswith(".md")
@@ -72,6 +73,7 @@ def rewrite(html_text: str, plan: dict[str, str], vault: str) -> tuple[str, list
             return m.group(0)
         new_file = new_md if has_md else re.sub(r"\.md$", "", new_md)
         parts[fields["file"]] = "file=" + quote(new_file, safe="")
+        parts[fields["vault"]] = "vault=" + quote(vault, safe="")
         done.append((old_md, new_md))
         return "obsidian://open?" + "".join(parts)
 

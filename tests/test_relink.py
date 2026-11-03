@@ -158,3 +158,22 @@ def test_malformed_map(tmp_path, monkeypatch, capsys, text):
     with pytest.raises(SystemExit) as e:
         relink.main()
     assert e.value.code == 1 and "Error:" in capsys.readouterr().out
+
+
+async def test_vault_name_case_insensitive_and_rewritten(tmp_path):
+    z = FakeClient([note("NOTE0001", "Sub-Sub%2FResources%2FZotero%2Fx", vault="Powerslave")])
+    plan = {"Sub-Sub/Resources/Zotero/x.md": "sub-sub/literature/x.md"}
+    changes = await relink.relink(z, plan, apply=True)
+    assert len(changes) == 1
+    body = html.unescape(z.written[0]["note"])
+    assert "vault=powerslave&file=sub-sub%2Fliterature%2Fx\"" in body
+    assert "Powerslave" not in body
+
+
+async def test_vault_option_sets_value_and_unchanged_links_keep_case(tmp_path):
+    z = FakeClient([note("NOTE0001", "Sub-Sub%2FResources%2FZotero%2Fx", vault="Powerslave"),
+                    note("NOTE0002", "Other%2Fy", vault="Powerslave")])
+    plan = {"Sub-Sub/Resources/Zotero/x.md": "sub-sub/literature/x.md"}
+    await relink.relink(z, plan, apply=True, vault="POWERSLAVE")
+    assert [o["key"] for o in z.written] == ["NOTE0001"]
+    assert "vault=POWERSLAVE&amp;file=" in z.written[0]["note"]
