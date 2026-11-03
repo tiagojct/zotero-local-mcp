@@ -22,6 +22,7 @@ from pathlib import Path
 from .client import ZoteroError
 from .config import Settings
 from .external import External, ExternalError
+from .layout import dir_path, layout_style, note_name
 from .library import Library
 from .records import LibraryIndex
 from .scholar import ReadOnlyZotero, short_authors
@@ -148,17 +149,18 @@ async def run(settings: Settings, today: dt.date | None = None, ext: External | 
         sections.append(f"## {EXCLUDED_HEADING}\n\n" + "\n".join(excluded))
     note = None
     if sections or warnings:
-        inbox = settings.vault / "Inbox"
+        inbox = dir_path(settings.vault, "Inbox")
         inbox.mkdir(parents=True, exist_ok=True)
-        name = f"Literature alerts {today.isoformat()}"
+        name = note_name(settings.vault, f"Literature alerts {today.isoformat()}")
         note = inbox / f"{name}.md"
         n = 2
         while note.exists():
-            note = inbox / f"{name} ({n}).md"
+            note = inbox / f"{name} ({n}).md" if layout_style(settings.vault) == "title" else inbox / f"{name}-{n}.md"
             n += 1
+        alerts_link = note_name(settings.vault, "Literature alerts")
         rel = note.relative_to(settings.vault)
         head = (f"---\ncreated: {today.isoformat()}\n---\n"
-                f"New works from the saved searches in [[Literature alerts]], published in the last "
+                f"New works from the saved searches in [[{alerts_link}]], published in the last "
                 f"{opts['days']} days and not in the library. Tick what you want, then ask the librarian: "
                 f"\"Import the ticked items from {rel}\".\n")
         if screening:

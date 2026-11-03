@@ -6,6 +6,7 @@ Two MCP servers for a local Zotero 10 library, plus a weekly alert script:
 - `zotero-scholar-mcp` (researcher): PubMed, Europe PMC and OpenAlex search with "already in library" flags, one merged search over several phrasings and all three sources, open-access full text by sections, citation graph, manuscript citation check, bibliographies as CSL JSON (for Quarto) or RIS (for Rayyan, Covidence and EndNote), also of works outside the library, import queue. It cannot write to Zotero.
 - `zotero-alerts`: runs saved searches from an Obsidian note and writes new works to an Inbox note. No AI model.
 - `zotero-review`: preview or apply several tag review notes from the terminal (`zotero-review apply 13-31`: note numbers, or paths in the vault). Asks before it writes; notes already applied are left out.
+- `zotero-relink`: after a vault rename, change the `obsidian://` links in the Zotero child notes. `zotero-relink --map PLAN.tsv` shows the notes that would change. `--apply` writes them (Zotero asks for permission). PLAN.tsv has a header row `old`, `new`, `kind`, `note`; the paths are relative to the vault root (the folder with `.obsidian/`). `--vault NAME` sets the vault name in the links (default `powerslave`).
 - `zotero-bakeoff`: model test for tagging. `sample` fixes 25 items and writes a reference note for your own tags; `run --model X` runs each model through `opencode run` (tools `bakeoff_items`, `bakeoff_submit`, no library writes); `score` writes precision, recall, edits needed, tokens and cost per model.
 
 The library is reached only through Zotero's local API on `127.0.0.1:23119`: no zotero.org key, changes appear in Zotero at once and sync as normal edits (WebDAV file sync is not affected). Outside metadata comes from Crossref, PubMed (NCBI E-utilities), Europe PMC, OpenAlex, Unpaywall and Open Library.
@@ -55,15 +56,21 @@ Group libraries are read-only. `list_libraries` lists the user's library ("user"
 5. Add the servers and the two agents to OpenCode: see `examples/opencode-global.jsonc`.
 6. Optional: weekly alerts with launchd, see `examples/launchd/`.
 
+## Layout styles
+
+The server reads the style from the folder names on disk. If the `ZOTERO_VAULT` folder holds `inbox`, `literature`, `syntheses`, `research` or `zotero` (exact lowercase names), the style is lowercase. Otherwise the style is TitleCase, and nothing changes.
+
+In the lowercase style the folders are `inbox/`, `literature/`, `syntheses/`, `research/` and `zotero/`. The notes have slug names: `inbox/zotero-import-queue.md`, `inbox/literature-alerts-YYYY-MM-DD.md`, `inbox/zotero-tag-review-NN.md`. The settings notes are `zotero/zotero-tags.md`, `zotero/zotero-agent.md` and `zotero/literature-alerts.md`. `ZOTERO_VOCAB` and `ZOTERO_ALERTS` still win.
+
 ## Configuration
 
 Settings come from environment variables or from the file named by `ZOTERO_MCP_ENV` (default `~/.config/zotero-local-mcp/env`), one `KEY=VALUE` per line.
 
 | Variable | Use |
 |---|---|
-| `ZOTERO_VOCAB` | Vocabulary Markdown file. Tag writes are blocked without it. |
-| `ZOTERO_VAULT` | Obsidian vault: import queue (`Inbox/Zotero import queue.md`) and alert notes. |
-| `ZOTERO_ALERTS` | Saved searches (default `<vault>/Systems/Literature alerts.md`). |
+| `ZOTERO_VOCAB` | Vocabulary Markdown file. Tag writes are blocked without it. In the lowercase layout the default is `<vault>/zotero/zotero-tags.md`. |
+| `ZOTERO_VAULT` | The Sub-Sub folder in your vault: import queue (`Inbox/Zotero import queue.md`) and alert notes. See Layout styles. |
+| `ZOTERO_ALERTS` | Saved searches (default `<vault>/Systems/Literature alerts.md`; in the lowercase layout `<vault>/zotero/literature-alerts.md`). |
 | `ZOTERO_CONTACT_EMAIL` | Required by Unpaywall; sent to Crossref, OpenAlex and NCBI for polite use. |
 | `NCBI_API_KEY`, `OPENALEX_API_KEY` | Optional higher rate limits. |
 | `BRAVE_API_KEY` | Optional: web_search through the Brave Search API. Without it web_search says it is not set up. |

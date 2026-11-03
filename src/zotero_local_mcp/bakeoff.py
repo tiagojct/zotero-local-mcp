@@ -3,14 +3,15 @@ scored against your own tags (the reference).
 
     zotero-bakeoff sample [--n 25] [--seed 1] [--force]
         Picks items without a topic/ tag, saves the sample, writes
-        Inbox/Model test reference.md for you to fill in blind.
+        Model test reference.md in the inbox folder (model-test-reference.md in the
+        lowercase layout) for you to fill in blind.
     zotero-bakeoff run --model opencode-go/glm-5.3-flash --model opencode-go/mimo-v2.6-pro
         Runs each model once through `opencode run` with the librarian agent. The
         model reads the sample (bakeoff_items) and saves proposals (bakeoff_submit).
         Nothing is written to the Zotero library.
     zotero-bakeoff score
         Compares every model's proposals with the reference and writes
-        Inbox/Model test results.md.
+        Model test results.md in the same folder.
 
 Only topic/, method/ and type/ tags are scored. status/ is your call.
 """
@@ -30,6 +31,7 @@ from pathlib import Path
 
 from .citekey import current_key
 from .config import Settings
+from .layout import dir_path, note_name
 from .library import Library, label, manual
 from .vocab import facet_of
 
@@ -56,10 +58,14 @@ class Bakeoff:
         self.dir = self.s.state_dir / "bakeoff"
 
     @property
+    def ref_name(self) -> str:
+        return f"{note_name(self.s.vault, REF_NOTE[:-3])}.md"
+
+    @property
     def inbox(self) -> Path:
         if self.s.vault is None:
             raise SystemExit("Set ZOTERO_VAULT (in the settings file) first.")
-        return self.s.vault / "Inbox"
+        return dir_path(self.s.vault, "Inbox")
 
     def _sample(self) -> dict:
         path = self.dir / "sample.json"
@@ -70,7 +76,7 @@ class Bakeoff:
     # ------------------------------------------------------------ sample
 
     async def make_sample(self, n: int = 25, seed: int = 1, force: bool = False) -> dict:
-        ref = self.inbox / REF_NOTE
+        ref = self.inbox / self.ref_name
         if ref.exists() and not force and any(parse_reference(ref.read_text(encoding="utf-8")).values()):
             raise SystemExit(f"{ref} already has your tags. Use --force to replace the sample.")
         items = await self.lib.regular_items()
@@ -89,10 +95,11 @@ class Bakeoff:
         rows = "\n".join(f"| {i['key']} | {current_key(i['data']) or ''} | {label(i['data']).replace('|', '/')} |  |"
                          for i in chosen)
         self.inbox.mkdir(parents=True, exist_ok=True)
+        tags_link = note_name(self.s.vault, "Zotero tags")
         ref.write_text(
             f"---\ncreated: {sample['created']}\n---\n"
-            "Reference tags for the model test (see [[Zotero MCP]]). Fill the last column with the topic/, "
-            "method/ and type/ tags you would give, separated by commas. Use only tags from [[Zotero tags]]. "
+            f"Reference tags for the model test (see [[Zotero MCP]]). Fill the last column with the topic/, "
+            "method/ and type/ tags you would give, separated by commas. Use only tags from [[{tags_link}]]. "
             "Do this before you look at the model files, so the test stays fair. Leave a row empty to skip it.\n\n"
             "| key | citekey | item | your tags |\n|---|---|---|---|\n" + rows + "\n",
             encoding="utf-8")
@@ -169,7 +176,7 @@ class Bakeoff:
 
     def score(self) -> dict:
         sample = self._sample()
-        ref_path = self.inbox / REF_NOTE
+        ref_path = self.inbox / self.ref_name
         reference = {k: v for k, v in parse_reference(ref_path.read_text(encoding="utf-8")).items() if v and k in sample["keys"]}
         if not reference:
             raise SystemExit(f"No reference tags yet. Fill the last column of {ref_path}.")
@@ -184,8 +191,8 @@ class Bakeoff:
             res.update(model=data["label"], usage=usage)
             results.append(res)
         results.sort(key=lambda r: r["edits"])
-        note = self.inbox / RESULTS_NOTE
-        note.write_text(render_results(results, len(reference), sample), encoding="utf-8")
+        note = self.inbox / f"{note_name(self.s.vault, RESULTS_NOTE[:-3])}.md"
+        note.write_text(render_results(results, len(reference), sample, ref_link=self.ref_name[:-3]), encoding="utf-8")
         return {"items_scored": len(reference), "results": results, "note": str(note)}
 
 
@@ -290,10 +297,10 @@ def usage_from_log(path: Path) -> dict:
     return {"steps": steps, "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": round(cost, 4)}
 
 
-def render_results(results: list[dict], n: int, sample: dict) -> str:
+def render_results(results: list[dict], n: int, sample: dict, ref_link: str = "Model test reference") -> str:
     lines = [
         f"---\ncreated: {dt.date.today().isoformat()}\n---",
-        f"Model test on {n} items (sample of {sample['created']}), scored against [[Model test reference]]. "
+        f"Model test on {n} items (sample of {sample['created']}), scored against [[{ref_link}]]. "
         "Edits = tags you would have to add or remove. Only topic/, method/ and type/ tags count.",
         "",
         "| model | edits | per item | precision | recall | F1 | exact items | invalid tags | status tags | "

@@ -192,7 +192,7 @@ async def export_bibliography(output_path: str, citekeys: list[str] | None = Non
 @mcp.tool(annotations=FILE)
 @safe
 async def queue_imports(entries: list[QueueEntry]) -> dict:
-    """Add works to the import queue note (Inbox/Zotero import queue.md) for the user to tick.
+    """Add works to the import queue note (inbox/zotero-import-queue.md in the lowercase layout, Inbox/Zotero import queue.md otherwise) for the user to tick.
     Works already in the library or in the queue are skipped."""
     return await scholar().queue_imports([e.model_dump() for e in entries])
 
@@ -201,7 +201,7 @@ async def queue_imports(entries: list[QueueEntry]) -> dict:
 @safe
 async def attach_note(key: str, summary: str, note_path: str, dry_run: bool = True) -> dict:
     """Attach a short child note to a Zotero item: a summary of a few lines plus an obsidian://
-    link to the literature note in the vault (note_path, e.g. Resources/Zotero/jacinto2026.md).
+    link to the literature note in the vault (note_path, e.g. literature/jacinto2026.md).
     Create-only: it cannot change existing notes or items. dry_run=true (default) previews."""
     return await scholar().attach_note(key, summary, note_path, dry_run)
 

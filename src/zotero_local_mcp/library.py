@@ -31,6 +31,7 @@ from .citekey import base_key, current_key, first_creator_name, unique_key, with
 from .client import LocalZotero, ZoteroError, current_library, link_scope
 from .config import Settings
 from .journal import Journal
+from .layout import dir_path, note_name
 from .vocab import VocabularyStore, facet_of
 
 NON_REGULAR = {"note", "attachment", "annotation"}
@@ -796,14 +797,18 @@ class Library:
         """Write a tag review note for the user: one row per item with its current tags, the
         proposed complete set of topic/, method/ and type/ tags, and a reason. Every row is
         checked against the vocabulary first. The note is new; an existing file is never
-        overwritten. Relative paths are in the vault; a bare name goes to Inbox/."""
+        overwritten. Relative paths are in the vault; a bare name goes to the inbox folder."""
         vocab = self.vocab.require()
         if self.s.vault is None:
             raise ZoteroError("write_tag_review needs the vault (ZOTERO_VAULT).")
         vault = self.s.vault.resolve()
         p = Path(path).expanduser()
         if not p.is_absolute():
-            p = vault / ("Inbox" if len(p.parts) == 1 else "") / p
+            if len(p.parts) == 1:
+                bare = p.name[:-3] if p.suffix == ".md" else p.name
+                p = dir_path(vault, "Inbox") / f"{note_name(vault, bare)}.md"
+            else:
+                p = vault / p
         if p.suffix != ".md":
             p = p.with_name(p.name + ".md")
         p = p.resolve()

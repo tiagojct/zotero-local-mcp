@@ -275,7 +275,7 @@ async def tag_items(changes: list[TagChange], dry_run: bool = True) -> dict:
 @safe
 async def apply_tag_review(path: str, mark_reviewed: bool = True, dry_run: bool = True,
                            again: bool = False) -> dict:
-    """Apply a tag review note (path in the vault, e.g. "Inbox/Zotero tag review 13.md") exactly
+    """Apply a tag review note (path in the vault, e.g. "inbox/zotero-tag-review-13.md" or "Inbox/Zotero tag review 13.md") exactly
     as the user edited it: for each table row, the Proposed tags become the item's complete topic/,
     method/ and type/ tags; a status/ tag in the row replaces the status. Rows left empty or
     marked "skip" are not changed. mark_reviewed removes the review marker. Use this instead of
@@ -297,7 +297,7 @@ class ReviewRow(BaseModel):
 @safe
 async def write_tag_review(path: str, rows: list[ReviewRow], intro: str = "") -> dict:
     """Write a tag review note for the user to check (a new Markdown note in the vault; a bare name
-    goes to Inbox/, e.g. "Zotero tag review 32"). Each row gets the item's citekey, author, year,
+    goes to the inbox folder, e.g. "Zotero tag review 32"). Each row gets the item's citekey, author, year,
     title and current tags, your proposed tags and reason. Every row is checked against the
     vocabulary and the per-facet limits before anything is written, and an existing note is never
     overwritten. Nothing changes in Zotero: the user edits the note, then apply_tag_review applies it.

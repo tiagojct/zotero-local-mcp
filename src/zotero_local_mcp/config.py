@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .layout import dir_path, note_name, settings_path
+
 
 def _path(value: str | None) -> Path | None:
     if not value:
@@ -50,7 +52,9 @@ class Settings:
 
     @property
     def queue_path(self) -> Path | None:
-        return self.vault / "Inbox" / "Zotero import queue.md" if self.vault else None
+        if not self.vault:
+            return None
+        return dir_path(self.vault, "Inbox") / f"{note_name(self.vault, 'Zotero import queue')}.md"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -59,7 +63,7 @@ class Settings:
         vault = _path(env.get("ZOTERO_VAULT"))
         return cls(
             api_url=env.get("ZOTERO_API_URL", cls.api_url).rstrip("/"),
-            vocab_path=_path(env.get("ZOTERO_VOCAB")),
+            vocab_path=_path(env.get("ZOTERO_VOCAB")) or (settings_path(vault, "tags") if vault else None),
             marker=env.get("ZOTERO_AGENT_MARKER", cls.marker),
             state_dir=_path(env.get("ZOTERO_MCP_STATE")) or cls.state_dir,
             auth_timeout=float(env.get("ZOTERO_AUTH_TIMEOUT", cls.auth_timeout)),
@@ -70,5 +74,5 @@ class Settings:
             google_books_api_key=env.get("GOOGLE_BOOKS_API_KEY") or None,
             vault=vault,
             alerts_config=_path(env.get("ZOTERO_ALERTS"))
-            or (vault / "Systems" / "Literature alerts.md" if vault else None),
+            or (settings_path(vault, "alerts") if vault else None),
         )

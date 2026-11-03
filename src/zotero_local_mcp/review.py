@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .client import ZoteroError
 from .config import Settings
+from .layout import dir_path, note_name
 from .library import Library
 
 
@@ -42,7 +43,8 @@ def expand(args: list[str], vault: Path | None) -> tuple[list[Path], list[str]]:
         if m and vault is not None:
             lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
             for n in range(lo, hi + 1):
-                cands = [vault / "Inbox" / f"Zotero tag review {x}.md" for x in dict.fromkeys((f"{n:02d}", str(n)))]
+                cands = [dir_path(vault, "Inbox") / f"{note_name(vault, f'Zotero tag review {x}')}.md"
+                         for x in dict.fromkeys((f"{n:02d}", str(n)))]
                 hit = next((c for c in cands if c.exists()), None)
                 if hit:
                     notes.append(hit)
