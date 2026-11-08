@@ -297,7 +297,8 @@ class ReviewRow(BaseModel):
 @safe
 async def write_tag_review(path: str, rows: list[ReviewRow], intro: str = "") -> dict:
     """Write a tag review note for the user to check (a new Markdown note in the vault; a bare name
-    goes to the inbox folder, e.g. "Zotero tag review 32"). Each row gets the item's citekey, author, year,
+    goes to the inbox folder, e.g. "Zotero tag review 32"; a name with a folder, such as
+    "inbox/Zotero tag review 32", is written in the vault's naming style too). Each row gets the item's citekey, author, year,
     title and current tags, your proposed tags and reason. Every row is checked against the
     vocabulary and the per-facet limits before anything is written, and an existing note is never
     overwritten. Nothing changes in Zotero: the user edits the note, then apply_tag_review applies it.

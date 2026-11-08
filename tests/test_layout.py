@@ -137,6 +137,23 @@ async def test_write_tag_review_lower(lib, tmp_path):
     assert (vault / "inbox" / "zotero-tag-review-41.md").exists()
 
 
+async def test_write_tag_review_with_folder_follows_layout(lib, tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "inbox").mkdir(parents=True)
+    lib.s = type(lib.s)(**{**lib.s.__dict__, "vault": vault})
+    res = await lib.write_tag_review("Inbox/Zotero tag review 45", [{"key": "AAAA1111", "tags": ["topic/spirometry"]}])
+    assert res["path"] == "inbox/zotero-tag-review-45.md"
+    assert not (vault / "inbox" / "Zotero tag review 45.md").exists()
+
+
+async def test_write_tag_review_with_folder_title_style(lib, tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "Inbox").mkdir(parents=True)
+    lib.s = type(lib.s)(**{**lib.s.__dict__, "vault": vault})
+    res = await lib.write_tag_review("Inbox/Zotero tag review 45", [{"key": "AAAA1111", "tags": ["topic/spirometry"]}])
+    assert res["path"] == "Inbox/Zotero tag review 45.md"
+
+
 def test_dir_path_follows_exact_folder(tmp_path):
     (tmp_path / "Inbox").mkdir()
     (tmp_path / "research").mkdir()

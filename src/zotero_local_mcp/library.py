@@ -31,7 +31,7 @@ from .citekey import base_key, current_key, first_creator_name, unique_key, with
 from .client import LocalZotero, ZoteroError, current_library, link_scope
 from .config import Settings
 from .journal import Journal
-from .layout import dir_path, note_name
+from .layout import LOWER_DIRS, dir_path, note_name
 from .vocab import VocabularyStore, facet_of
 
 NON_REGULAR = {"note", "attachment", "annotation"}
@@ -804,11 +804,14 @@ class Library:
         vault = self.s.vault.resolve()
         p = Path(path).expanduser()
         if not p.is_absolute():
+            stem = p.name[:-3] if p.suffix == ".md" else p.name
             if len(p.parts) == 1:
-                bare = p.name[:-3] if p.suffix == ".md" else p.name
-                p = dir_path(vault, "Inbox") / f"{note_name(vault, bare)}.md"
+                p = dir_path(vault, "Inbox") / f"{note_name(vault, stem)}.md"
             else:
-                p = vault / p
+                # A path with folders: the folder follows the layout and the file name follows the naming rule.
+                first = p.parts[0]
+                base = dir_path(vault, first.capitalize()) if first.lower() in LOWER_DIRS else vault / first
+                p = base.joinpath(*p.parts[1:-1]) / f"{note_name(vault, stem)}.md"
         if p.suffix != ".md":
             p = p.with_name(p.name + ".md")
         p = p.resolve()
