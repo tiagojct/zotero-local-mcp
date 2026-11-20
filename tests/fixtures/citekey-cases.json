@@ -364,5 +364,99 @@
       ],
       "expected": "lee2020aa"
     }
+  ],
+  "cited": [
+    {
+      "name": "wikilink",
+      "text": "See [[smith2020]].",
+      "expected": [
+        "smith2020"
+      ]
+    },
+    {
+      "name": "wikilink with folder, extension and alias",
+      "text": "[[literature/smith2020.md|Smith]]",
+      "expected": [
+        "smith2020"
+      ]
+    },
+    {
+      "name": "wikilink to a heading",
+      "text": "[[smith2020#Key points]]",
+      "expected": [
+        "smith2020"
+      ]
+    },
+    {
+      "name": "wikilink with a space is not a key",
+      "text": "[[Agenda status]]",
+      "expected": []
+    },
+    {
+      "name": "Pandoc citation with a locator",
+      "text": "[@doe2020, p. 3]",
+      "expected": [
+        "doe2020"
+      ]
+    },
+    {
+      "name": "two Pandoc citations",
+      "text": "[@smith2020; @jones2019a]",
+      "expected": [
+        "jones2019a",
+        "smith2020"
+      ]
+    },
+    {
+      "name": "bare @key, trailing punctuation removed",
+      "text": "As @doe2020: shows, and @roe2018.",
+      "expected": [
+        "doe2020",
+        "roe2018"
+      ]
+    },
+    {
+      "name": "e-mail address is not a key",
+      "text": "Write to a@b.com or x@y.",
+      "expected": []
+    },
+    {
+      "name": "braced key keeps other characters",
+      "text": "[@{weird/key.}]",
+      "expected": [
+        "weird/key."
+      ]
+    },
+    {
+      "name": "key with accents",
+      "text": "[@müller2020]",
+      "expected": [
+        "müller2020"
+      ]
+    },
+    {
+      "name": "decomposed accents are normalised",
+      "text": "[[müller2020]]",
+      "expected": [
+        "müller2020"
+      ]
+    },
+    {
+      "name": "@ after @ or a letter is not a key",
+      "text": "@@doe2020 and abc@doe2021",
+      "expected": []
+    },
+    {
+      "name": "key must start with a letter or digit",
+      "text": "@_hidden and @-dash",
+      "expected": []
+    },
+    {
+      "name": "key with colon and dot inside",
+      "text": "[@smith:2020.v2]",
+      "expected": [
+        "smith:2020.v2"
+      ]
+    }
   ]
 }

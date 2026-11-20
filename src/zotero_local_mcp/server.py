@@ -344,7 +344,8 @@ async def remove_automatic_tags(keys: list[str] | None = None, dry_run: bool = T
 async def set_citekeys(keys: list[str] | None = None, force: bool = False,
                        dry_run: bool = True) -> dict:
     """Give items citekeys like jacinto2026 (a, b, ... on collisions). keys=None means all
-    items without a key. Existing keys are kept (pinned) unless force=true."""
+    items without a key. Existing keys are kept (pinned) unless force=true. Even with force, a key
+    that the Sub-Sub folder uses (a literature note or a citation) is kept and listed in kept_cited."""
     return await lib().set_citekeys(keys, force, dry_run)
 
 

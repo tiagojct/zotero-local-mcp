@@ -20,6 +20,7 @@ from .citekey import base_key, current_key, first_creator_name, slug, unique_key
 from .client import ZoteroError
 from .external import External, ExternalError
 from .library import PROTECTED_FIELDS, Library, label, manual, regular, truncate
+from .vaultkeys import taken_in_vault
 from .records import (
     DOI_RE, LibraryIndex, norm_doi, detect, extra_ids, fingerprint, item_ids, label_of, norm_isbn,
     record_to_zotero, title_similarity, zotero_type,
@@ -107,7 +108,7 @@ class Librarian:
             if collection_key not in names:
                 raise ZoteroError(f"No collection {collection_key}. Use list_collections.")
         index = LibraryIndex(await self.lib.regular_items())
-        taken = set(index.by_citekey)
+        taken = set(index.by_citekey) | taken_in_vault(self.lib.s.vault)
         skipped: dict[str, str] = {}
         errors: dict[str, str] = {}
         todo: list[tuple[str, str, str]] = []
@@ -314,7 +315,7 @@ class Librarian:
         keys = [c.get("child_key", "") for c in changes]
         found = {i["key"]: i for i in await self.z.items_by_keys([k for k in keys if k])}
         index = LibraryIndex(await self.lib.regular_items())
-        taken = set(index.by_citekey)
+        taken = set(index.by_citekey) | taken_in_vault(self.lib.s.vault)
         marker = self.lib.s.marker
         plan: list[dict] = []
         skipped: dict[str, str] = {}

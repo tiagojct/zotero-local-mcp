@@ -840,3 +840,10 @@ def test_citekeys_for_organisations():
     assert key("Direção-Geral da Saúde") == "direcaogeralsaude2026"
     assert base_key({"title": "The Economist, N. 9514", "date": "2026-08-29"}) == "economist2026"
     assert base_key({"title": "O Público", "date": "2020"}) == "publico2020"
+
+
+async def test_import_skips_the_key_of_a_literature_note(librarian, fake, vault):
+    (vault / "Literature").mkdir(exist_ok=True)
+    (vault / "Literature" / "jacinto2026.md").write_text("---\ncitekey: jacinto2026\n---\n", encoding="utf-8")
+    prev = await librarian.import_identifiers(["10.1183/13993003.00001-2026"])
+    assert prev["would_import"][0]["citekey"] == "jacinto2026a"

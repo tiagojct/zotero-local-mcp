@@ -32,6 +32,7 @@ from .client import LocalZotero, ZoteroError, current_library, link_scope
 from .config import Settings
 from .journal import Journal
 from .layout import LOWER_DIRS, dir_path, note_name
+from .vaultkeys import taken_in_vault, used_in_vault
 from .vocab import VocabularyStore, facet_of
 
 NON_REGULAR = {"note", "attachment", "annotation"}
@@ -979,7 +980,10 @@ class Library:
         items = await self.regular_items()
         by_key = {i["key"]: i for i in items}
         holders = Counter(k for i in items if (k := current_key(i["data"])))
-        taken = set(holders)
+        # Keys of literature notes count as taken, as in zotero-gam.
+        taken = set(holders) | taken_in_vault(self.s.vault)
+        # A key that the Sub-Sub folder uses (a literature note or a citation) is never changed.
+        used = used_in_vault(self.s.vault) if force else set()
         if keys:
             unknown = [k for k in keys if k not in by_key]
             if unknown:
@@ -990,10 +994,14 @@ class Library:
         targets.sort(key=lambda i: i["data"].get("dateAdded", ""))
         edits: dict[str, Editor] = {}
         pinned = 0
+        kept_cited: list[str] = []
         for i in targets:
             old = current_key(i["data"])
             if old and not force:
                 pinned += 1
+                continue
+            if old and old.lower() in used:
+                kept_cited.append(old)
                 continue
             if old:
                 holders[old] -= 1
@@ -1004,6 +1012,7 @@ class Library:
             edits[i["key"]] = lambda data, new=new: with_key(data, new)
         out = await self._run("set_citekeys", f"{len(edits)} items", edits, dry_run)
         out["kept_existing_keys"] = pinned
+        out["kept_cited"] = sorted(kept_cited)
         return out
 
     async def update_fields(self, key: str, fields: dict[str, Any], dry_run: bool = True) -> dict:
