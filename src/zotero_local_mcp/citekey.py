@@ -24,9 +24,10 @@ YEAR = re.compile(r"(?<!\d)(1[5-9]\d\d|20\d\d|21\d\d)(?!\d)")
 
 def slug(text: str) -> str:
     text = unicodedata.normalize("NFKD", text)
-    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
+    # After lower(), so that Ø, Æ, Ł and ẞ are mapped too.
     text = text.replace("ß", "ss").replace("ø", "o").replace("æ", "ae").replace("ł", "l")
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+    return re.sub(r"[^a-z0-9]", "", text)
 
 
 def year_of(data: dict) -> str:

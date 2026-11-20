@@ -1,0 +1,368 @@
+{
+  "_comment": "Shared cases for the citekey rules. Canonical copy: zotero-local-mcp tests/fixtures/citekey-cases.json. zotero-gam keeps an exact copy in test/fixtures/. Change both.",
+  "base_key": [
+    {
+      "name": "plain author and ISO date",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Jacinto",
+            "firstName": "Tiago"
+          }
+        ],
+        "date": "2026-03-01"
+      },
+      "expected": "jacinto2026"
+    },
+    {
+      "name": "accents are removed",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Müller",
+            "firstName": "X"
+          }
+        ],
+        "date": "2019"
+      },
+      "expected": "muller2019"
+    },
+    {
+      "name": "Portuguese tilde and cedilla",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Gonçalves-Simões",
+            "firstName": "X"
+          }
+        ],
+        "date": "2021"
+      },
+      "expected": "goncalvessimoes2021"
+    },
+    {
+      "name": "lower-case letters without a decomposition",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Søbałßæ",
+            "firstName": "X"
+          }
+        ],
+        "date": "2020"
+      },
+      "expected": "sobalssae2020"
+    },
+    {
+      "name": "upper-case letters without a decomposition",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "ØSTER-ŁUKAẞÆ",
+            "firstName": "X"
+          }
+        ],
+        "date": "2020"
+      },
+      "expected": "osterlukassae2020"
+    },
+    {
+      "name": "surname with a space and an apostrophe",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "van der O'Neill",
+            "firstName": "X"
+          }
+        ],
+        "date": "2018"
+      },
+      "expected": "vanderoneill2018"
+    },
+    {
+      "name": "institution name is joined",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "name": "World Health Organization"
+          }
+        ],
+        "date": "2023"
+      },
+      "expected": "worldhealthorganization2023"
+    },
+    {
+      "name": "long institution: part before the comma, three main words",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "name": "European Commission, Directorate-General for Research"
+          }
+        ],
+        "date": "2015"
+      },
+      "expected": "europeancommission2015"
+    },
+    {
+      "name": "institution with small words and a dash",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "name": "Direção-Geral da Saúde de Portugal"
+          }
+        ],
+        "date": "2024"
+      },
+      "expected": "direcaogeralsaude2024"
+    },
+    {
+      "name": "editor when there is no author",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "editor",
+            "lastName": "Smith"
+          },
+          {
+            "creatorType": "translator",
+            "lastName": "Jones"
+          }
+        ],
+        "date": "2010"
+      },
+      "expected": "smith2010"
+    },
+    {
+      "name": "author wins over an earlier editor",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "editor",
+            "lastName": "Smith"
+          },
+          {
+            "creatorType": "author",
+            "lastName": "Brown",
+            "firstName": "X"
+          }
+        ],
+        "date": "2011"
+      },
+      "expected": "brown2011"
+    },
+    {
+      "name": "other creator when there is no author or editor",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "translator",
+            "lastName": "Jones"
+          }
+        ],
+        "date": "2012"
+      },
+      "expected": "jones2012"
+    },
+    {
+      "name": "no creators: first main word of the title",
+      "data": {
+        "title": "The Economist",
+        "date": "1999"
+      },
+      "expected": "economist1999"
+    },
+    {
+      "name": "no creators: Portuguese article is skipped",
+      "data": {
+        "title": "O Público e a saúde",
+        "date": "2002"
+      },
+      "expected": "publico2002"
+    },
+    {
+      "name": "no creators: only small words, first word is kept",
+      "data": {
+        "title": "Of the",
+        "date": "2003"
+      },
+      "expected": "of2003"
+    },
+    {
+      "name": "no creators and no title",
+      "data": {
+        "date": "2004"
+      },
+      "expected": "anon2004"
+    },
+    {
+      "name": "no year gives nd",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Lee",
+            "firstName": "X"
+          }
+        ]
+      },
+      "expected": "leend"
+    },
+    {
+      "name": "year inside free text",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Lee",
+            "firstName": "X"
+          }
+        ],
+        "date": "Spring c. 1987, 2nd ed."
+      },
+      "expected": "lee1987"
+    },
+    {
+      "name": "year before 1500 is not a year",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Lee",
+            "firstName": "X"
+          }
+        ],
+        "date": "1499"
+      },
+      "expected": "leend"
+    },
+    {
+      "name": "a longer number is not a year",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Lee",
+            "firstName": "X"
+          }
+        ],
+        "date": "120254"
+      },
+      "expected": "leend"
+    },
+    {
+      "name": "empty surname falls back to the name field",
+      "data": {
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "",
+            "name": "OECD"
+          }
+        ],
+        "date": "2017"
+      },
+      "expected": "oecd2017"
+    }
+  ],
+  "current_key": [
+    {
+      "name": "native field",
+      "data": {
+        "citationKey": "smith2020",
+        "extra": "Citation Key: other2020"
+      },
+      "expected": "smith2020"
+    },
+    {
+      "name": "Extra line, any case and spaces",
+      "data": {
+        "extra": "PMID: 1\n  citation KEY :  jones2019a  \nnote"
+      },
+      "expected": "jones2019a"
+    },
+    {
+      "name": "no key",
+      "data": {
+        "extra": "PMID: 1"
+      },
+      "expected": null
+    },
+    {
+      "name": "empty native field uses Extra",
+      "data": {
+        "citationKey": "",
+        "extra": "Citation Key: lee2001"
+      },
+      "expected": "lee2001"
+    }
+  ],
+  "unique_key": [
+    {
+      "name": "free base",
+      "base": "lee2020",
+      "taken": [],
+      "expected": "lee2020"
+    },
+    {
+      "name": "first suffix",
+      "base": "lee2020",
+      "taken": [
+        "lee2020"
+      ],
+      "expected": "lee2020a"
+    },
+    {
+      "name": "skips used suffixes",
+      "base": "lee2020",
+      "taken": [
+        "lee2020",
+        "lee2020a",
+        "lee2020b"
+      ],
+      "expected": "lee2020c"
+    },
+    {
+      "name": "after z comes aa",
+      "base": "lee2020",
+      "taken": [
+        "lee2020",
+        "lee2020a",
+        "lee2020b",
+        "lee2020c",
+        "lee2020d",
+        "lee2020e",
+        "lee2020f",
+        "lee2020g",
+        "lee2020h",
+        "lee2020i",
+        "lee2020j",
+        "lee2020k",
+        "lee2020l",
+        "lee2020m",
+        "lee2020n",
+        "lee2020o",
+        "lee2020p",
+        "lee2020q",
+        "lee2020r",
+        "lee2020s",
+        "lee2020t",
+        "lee2020u",
+        "lee2020v",
+        "lee2020w",
+        "lee2020x",
+        "lee2020y",
+        "lee2020z"
+      ],
+      "expected": "lee2020aa"
+    }
+  ]
+}
