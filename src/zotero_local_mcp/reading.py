@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -65,6 +66,22 @@ def vault_root(vault: Path | None) -> Path | None:
         if (folder / ".obsidian").is_dir():
             return folder
     return v
+
+
+def inside(path: Path, root: Path) -> bool:
+    """True when path is root or in it. The comparison asks the file system (same folder), not the
+    text: macOS ignores case, so ~/Quarterdeck/Powerslave is ~/quarterdeck/powerslave."""
+    if path == root or root in path.parents:
+        return True
+    if not root.exists():
+        return False
+    for folder in (path, *path.parents):
+        try:
+            if folder.exists() and os.path.samefile(folder, root):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _sort_key(a: dict) -> tuple:
@@ -166,7 +183,7 @@ class Reading:
         path = Path(folder).expanduser() if folder else self.lib.s.state_dir / "export"
         path = path.resolve()
         root = vault_root(self.lib.s.vault)
-        if root and (path == root or root in path.parents):
+        if root and inside(path, root):
             raise ValueError(
                 f"{path} is inside the Obsidian vault {root}. Export to a folder outside the vault; "
                 "literature notes in the vault are made by gam or Sub-Sub.")

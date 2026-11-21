@@ -314,3 +314,16 @@ async def test_job_fast_result_leaves_no_job():
 
     assert await jobs.run("t", quick, wait=1, call="c") == 1
     assert jobs._jobs == {}
+
+
+async def test_export_markdown_vault_guard_ignores_case(lib, tmp_path):
+    vault = tmp_path / "Powerslave"
+    (vault / ".obsidian").mkdir(parents=True)
+    (vault / "atlas").mkdir()
+    lib.s = dataclasses.replace(lib.s, vault=vault / "sub-sub")
+    if not (tmp_path / "powerslave").exists():
+        pytest.skip("this file system is case-sensitive")
+    for folder in (tmp_path / "powerslave" / "atlas", tmp_path / "POWERSLAVE" / "new-folder"):
+        with pytest.raises(ValueError, match="inside the Obsidian vault"):
+            await Reading(lib).export_markdown(keys=["AAAA1111"], folder=str(folder))
+    assert not (vault / "new-folder").exists()
