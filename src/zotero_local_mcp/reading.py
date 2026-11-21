@@ -55,6 +55,18 @@ def annotation_row(a: dict) -> dict:
     return {k: v for k, v in row.items() if v not in ("", [], None) or k in ("key", "attachment", "type")}
 
 
+def vault_root(vault: Path | None) -> Path | None:
+    """The Obsidian vault that holds ZOTERO_VAULT: the nearest folder, from ZOTERO_VAULT up, with
+    .obsidian/ in it. ZOTERO_VAULT is often the Sub-Sub folder inside the vault, not its root."""
+    if not vault:
+        return None
+    v = vault.expanduser().resolve()
+    for folder in (v, *v.parents):
+        if (folder / ".obsidian").is_dir():
+            return folder
+    return v
+
+
 def _sort_key(a: dict) -> tuple:
     d = a["data"]
     return (d.get("annotationSortIndex") or "", d.get("dateAdded") or "")
@@ -153,13 +165,11 @@ class Reading:
     def _export_folder(self, folder: str | None) -> Path:
         path = Path(folder).expanduser() if folder else self.lib.s.state_dir / "export"
         path = path.resolve()
-        vault = self.lib.s.vault
-        if vault:
-            v = vault.expanduser().resolve()
-            if path == v or v in path.parents:
-                raise ValueError(
-                    f"{path} is inside the vault. Export to a folder outside the vault; literature notes "
-                    "in the vault are made by gam or Sub-Sub.")
+        root = vault_root(self.lib.s.vault)
+        if root and (path == root or root in path.parents):
+            raise ValueError(
+                f"{path} is inside the Obsidian vault {root}. Export to a folder outside the vault; "
+                "literature notes in the vault are made by gam or Sub-Sub.")
         return path
 
     async def _select(self, keys: list[str] | None, collection_key: str | None,
@@ -212,6 +222,9 @@ class Reading:
                 name = f"{name}-{d['key']}"
             used.add(name.lower())
             path = out_dir / f"{name}.md"
+            if path.exists() and not path.is_file():
+                skipped.append({"key": d["key"], "path": str(path), "reason": "a folder has this name"})
+                continue
             if path.exists():
                 head = path.read_text(encoding="utf-8", errors="replace")[:200]
                 if EXPORT_MARKER not in head.split("\n---", 1)[0]:

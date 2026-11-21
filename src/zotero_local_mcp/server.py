@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -112,7 +113,8 @@ def long_running(fn):
 
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
-        return await JOBS.run(fn.__name__, lambda: fn(*args, **kwargs))
+        call = json.dumps([args, kwargs], sort_keys=True, default=str)
+        return await JOBS.run(fn.__name__, lambda: fn(*args, **kwargs), call=call)
 
     return wrapper
 

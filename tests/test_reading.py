@@ -160,7 +160,7 @@ async def test_export_markdown_refuses_the_vault_and_empty_requests(lib, tmp_pat
     vault = tmp_path / "vault"
     (vault / "literature").mkdir(parents=True)
     lib.s = dataclasses.replace(lib.s, vault=vault)
-    with pytest.raises(ValueError, match="inside the vault"):
+    with pytest.raises(ValueError, match="inside the Obsidian vault"):
         await Reading(lib).export_markdown(keys=["AAAA1111"], folder=str(vault / "literature"))
     with pytest.raises(ValueError, match="Give keys"):
         await Reading(lib).export_markdown(folder=str(tmp_path / "kb"))
@@ -257,3 +257,60 @@ async def test_server_wraps_long_tools(monkeypatch):
 def test_tidy_text_removes_indentation_and_empty_runs():
     from zotero_local_mcp.reading import tidy_text
     assert tidy_text("  Title\n  \n\n\n    Para one\n\tPara two  \n\n") == "Title\n\nPara one\nPara two"
+
+
+async def test_export_markdown_refuses_the_whole_obsidian_vault(lib, tmp_path):
+    # ZOTERO_VAULT is the Sub-Sub folder; the Obsidian vault (with .obsidian/) is its parent.
+    vault = tmp_path / "powerslave"
+    (vault / ".obsidian").mkdir(parents=True)
+    (vault / "sub-sub").mkdir()
+    (vault / "atlas").mkdir()
+    lib.s = dataclasses.replace(lib.s, vault=vault / "sub-sub")
+    with pytest.raises(ValueError, match="inside the Obsidian vault"):
+        await Reading(lib).export_markdown(keys=["AAAA1111"], folder=str(vault / "atlas"))
+    assert not list((vault / "atlas").iterdir())
+    res = await Reading(lib).export_markdown(keys=["AAAA1111"], folder=str(tmp_path / "kb"))
+    assert len(res["written"]) == 1
+
+
+async def test_export_markdown_skips_a_folder_with_the_file_name(lib, tmp_path):
+    out = tmp_path / "kb"
+    (out / "BBBB2222.md").mkdir(parents=True)
+    res = await Reading(lib).export_markdown(keys=["AAAA1111", "BBBB2222"], folder=str(out))
+    assert [w["key"] for w in res["written"]] == ["AAAA1111"]
+    assert res["skipped"][0]["reason"] == "a folder has this name"
+
+
+async def test_job_same_call_after_client_cancel_does_not_run_twice():
+    jobs = Jobs()
+    gate = asyncio.Event()
+    starts = []
+
+    async def write():
+        starts.append(1)
+        await gate.wait()
+        return {"written": True}
+
+    caller = asyncio.ensure_future(jobs.run("import_identifiers", write, wait=10, call="same"))
+    await asyncio.sleep(0.01)
+    caller.cancel()  # the client stops waiting before the job id is given
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    again = await jobs.run("import_identifiers", write, wait=0.01, call="same")
+    assert again["status"] == "running" and "still running" in again["message"]
+    assert starts == [1]
+    other = await jobs.run("import_identifiers", write, wait=0.01, call="other")
+    assert other["job_id"] != again["job_id"] and starts == [1, 1]
+    gate.set()
+    await asyncio.sleep(0.01)
+    assert jobs.get(again["job_id"])["result"] == {"written": True}
+
+
+async def test_job_fast_result_leaves_no_job():
+    jobs = Jobs()
+
+    async def quick():
+        return 1
+
+    assert await jobs.run("t", quick, wait=1, call="c") == 1
+    assert jobs._jobs == {}
