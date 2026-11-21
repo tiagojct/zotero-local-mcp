@@ -16,6 +16,8 @@ from .config import Settings
 from .external import External, ExternalError
 from .library import Library
 from .bakeoff import Bakeoff
+from .jobs import Jobs
+from .reading import Reading
 from .manage import Librarian
 
 INSTRUCTIONS = """\
@@ -32,6 +34,11 @@ file with facets topic/, method/, type/, status/. Workflow rules:
   metadata. Files and notes without a parent item: standalone_items, then
   set_parent_items (find_reference and web_search help to identify them).
   Keywords and MeSH headings are never imported as tags.
+- "This paper" or "the selected items" means the Zotero window: get_selected_items.
+- For many items, export_markdown writes files; read or grep them instead of
+  calling get_fulltext for each item.
+- A long call can return status "running" with a job_id: call get_job with it,
+  not the tool again.
 """
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -42,6 +49,7 @@ WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHin
 mcp = MCPServer("zotero", instructions=INSTRUCTIONS, version=__version__)
 _lib: Library | None = None
 _librarian: Librarian | None = None
+JOBS = Jobs()
 
 
 def lib() -> Library:
@@ -93,6 +101,20 @@ class TagChange(BaseModel):
     replace: list[str] = Field(default_factory=list, description=(
         "Facets to replace, e.g. [\"topic\", \"method\", \"type\"]: the item's existing tags in these "
         "facets are removed unless they are in add. Use it when re-tagging an item."))
+
+
+def reading() -> Reading:
+    return Reading(lib())
+
+
+def long_running(fn):
+    """After ZOTERO_JOB_WAIT seconds (default 45), return a job id; the call goes on in the server."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        return await JOBS.run(fn.__name__, lambda: fn(*args, **kwargs))
+
+    return wrapper
 
 
 def safe(fn):
@@ -201,6 +223,61 @@ async def get_fulltext(key: str, offset: int = 0, max_chars: int = 30000,
     library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
     with in_library(library):
         return await lib().get_fulltext(key, offset, max_chars)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def get_annotations(key: str, kinds: list[str] | None = None, library: str | None = None) -> dict:
+    """Highlights, underlines, notes and comments made in Zotero's reader, in reading order, by
+    file. key: the item or one of its files. kinds: e.g. ["highlight", "note"] (empty: all).
+    Each annotation has its page label and a zotero:// link that opens the file at it.
+    library: "user" (default) or "group:<id>" from list_libraries; groups are read-only."""
+    with in_library(library):
+        return await reading().get_annotations(key, kinds)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def get_selected_items(detail: bool = False) -> dict:
+    """What is selected in the Zotero window now: the items in the item list, or the paper open
+    in the reader tab (reader: the file; items: its parent), and the selected collection. Use it
+    for "this paper" or "the selected items". detail=true adds tags, abstract, venue and DOI.
+    Needs the gam plugin (0.4.0 or later) in Zotero."""
+    return await reading().get_selected_items(detail)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def show_in_zotero(key: str, library: str | None = None) -> dict:
+    """Select the item in the Zotero window (opens zotero://select). Changes nothing.
+    library: "user" (default) or "group:<id>" from list_libraries."""
+    with in_library(library):
+        return await reading().show_in_zotero(key)
+
+
+@mcp.tool(annotations=WRITE)
+@safe
+@long_running
+async def export_markdown(keys: list[str] | None = None, collection_key: str | None = None,
+                          query: str | None = None, folder: str | None = None,
+                          fulltext: bool = True, limit: int = 50, library: str | None = None) -> dict:
+    """Write items as Markdown files, one per item (<citekey>.md): metadata, abstract, manual
+    tags, child notes, annotations with page labels, and the indexed full text. Then read or
+    grep the files instead of pulling many full texts into the chat. Give keys, collection_key
+    or query (title/creator/year). folder: default ~/.local/share/zotero-local-mcp/export; it
+    cannot be inside the vault. Files that an earlier export wrote are replaced; other files
+    are never overwritten. limit: at most 200. Changes nothing in the library.
+    library: "user" (default) or "group:<id>" from list_libraries."""
+    with in_library(library):
+        return await reading().export_markdown(keys, collection_key, query, folder, fulltext, limit)
+
+
+@mcp.tool(annotations=READ)
+@safe
+async def get_job(job_id: str) -> dict:
+    """The result of a call that returned status "running" with a job_id. status is running,
+    done (with result) or failed (with error). Call again while it is running."""
+    return JOBS.get(job_id)
 
 
 @mcp.tool(annotations=WRITE)
@@ -400,6 +477,7 @@ async def undo(journal_id: str | None = None, dry_run: bool = True) -> dict:
 
 @mcp.tool(annotations=WRITE)
 @safe
+@long_running
 async def import_identifiers(identifiers: list[str], collection_key: str | None = None,
                              tags: list[str] | None = None, dry_run: bool = True) -> dict:
     """Add items by DOI, PMID (pmid:123) or ISBN (isbn:978...). Metadata comes from Crossref,
@@ -461,6 +539,7 @@ async def audit_metadata(item_type: str | None = None, problem: str | None = Non
 
 @mcp.tool(annotations=WRITE)
 @safe
+@long_running
 async def repair_metadata(keys: list[str], overwrite: bool = False, min_confidence: float = 0.9,
                           dry_run: bool = True) -> dict:
     """Fill empty fields from Crossref/PubMed/Open Library. Items with a DOI, PMID or ISBN match
@@ -485,6 +564,7 @@ async def find_duplicates(library: str | None = None) -> dict:
 
 @mcp.tool(annotations=READ)
 @safe
+@long_running
 async def check_retractions(keys: list[str] | None = None, refresh: bool = False,
                             limit: int = 200, library: str | None = None) -> dict:
     """Check items with a DOI for retractions, expressions of concern and corrections
@@ -505,6 +585,7 @@ async def missing_pdfs(item_type: str | None = None, with_doi_only: bool = False
 
 @mcp.tool(annotations=WRITE)
 @safe
+@long_running
 async def attach_oa_pdfs(keys: list[str], dry_run: bool = True) -> dict:
     """Find legal open-access PDFs through Unpaywall and attach them (up to 25 items per call).
     The dry run shows source, version (published or accepted manuscript) and licence."""

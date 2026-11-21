@@ -333,6 +333,25 @@ class LocalZotero:
         """Every item including notes and attachments (not trashed)."""
         return await self.get_json("items")
 
+    async def annotations(self) -> list[dict]:
+        """Every annotation of the library. Zotero 10's local API does not list them as children of a file."""
+        return await self.get_json("items", {"itemType": "annotation"})
+
+    async def gam_selection(self) -> dict:
+        """What is selected in the Zotero window, from the gam plugin (GET /gam/selection)."""
+        root = self.base[: -len("/api")] if self.base.endswith("/api") else self.base
+        try:
+            r = await self._http.get(f"{root}/gam/selection")
+        except httpx.TransportError as exc:
+            raise ZoteroError(f"Cannot reach Zotero at {root}. Start Zotero.") from exc
+        if r.status_code == 404:
+            raise ZoteroError(
+                "gam does not answer at /gam/selection. Install gam 0.4.0 or later and turn it on in "
+                "Zotero > Tools > Plugins, then restart Zotero.")
+        if r.status_code >= 400:
+            raise ZoteroError(f"gam refused the request: HTTP {r.status_code} {r.text[:200]}")
+        return r.json()
+
     async def template(self, item_type: str, link_mode: str | None = None) -> dict:
         """An empty item of this type, with every field its type allows.
 

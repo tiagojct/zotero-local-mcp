@@ -61,6 +61,7 @@ class FakeZotero:
         self.uploads: dict[str, dict] = {}
         self.files: dict[str, bytes] = {}
         self.groups: dict[int, tuple[str, "FakeZotero"]] = {}  # group id -> (name, its own library)
+        self.selection: dict | None = None  # answer of gam's /gam/selection; None: gam not installed
 
     def add_group(self, group_id: int, name: str) -> "FakeZotero":
         """A group library: its own items, served at /api/groups/<id>/ by the same Zotero."""
@@ -126,6 +127,10 @@ class FakeZotero:
             return resp(412, {"error": "server id mismatch"})
         if path in ("/api", "/api/"):
             return resp(200, {})
+        if path == "/gam/selection":
+            if self.selection is None or method != "GET":
+                return 404, {"Content-Type": "text/plain"}, b"No endpoint found"
+            return 200, {"Content-Type": "application/json"}, json.dumps(self.selection).encode()
         if parts.netloc == "api.zotero.org":
             # The public web API serves item templates; Zotero 10's local API does not.
             self.web_template_requests += 1
@@ -179,6 +184,8 @@ class FakeZotero:
             if rest == "items":
                 keys = q.get("itemKey", "").split(",") if "itemKey" in q else None
                 items = [i for i in live if keys is None or i["key"] in keys]
+                if "itemType" in q:
+                    items = [i for i in items if i.get("itemType") == q["itemType"]]
                 return resp(200, [self._wrap(i) for i in items])
             if rest.startswith("items/") and rest.endswith("/fulltext"):
                 key = rest.split("/")[1]
@@ -187,7 +194,9 @@ class FakeZotero:
                 return resp(200, self.fulltext[key])
             if rest.startswith("items/") and rest.endswith("/children"):
                 parent = rest.split("/")[1]
-                return resp(200, [self._wrap(i) for i in live if i.get("parentItem") == parent])
+                # Like Zotero 10: annotations are not listed as children of their file.
+                return resp(200, [self._wrap(i) for i in live
+                                  if i.get("parentItem") == parent and i.get("itemType") != "annotation"])
             if rest.startswith("items/"):
                 key = rest.split("/")[1]
                 if key not in self.items:

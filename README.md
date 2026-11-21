@@ -38,10 +38,20 @@ The library is reached only through Zotero's local API on `127.0.0.1:23119`: no 
 | tag_audit, standalone_items | write_tag_review, apply_tag_review | |
 | find_reference, web_search | set_parent_items | |
 | get_figure, list_libraries | | |
+| get_annotations, get_selected_items | export_markdown (files only) | |
+| show_in_zotero, get_job | | |
 
 Group libraries are read-only. `list_libraries` lists the user's library ("user") and the groups in this Zotero ("group:<id>"). The read tools (find_items, get_item, get_fulltext, get_figure, standalone_items, library_overview, list_tags, list_collections, find_duplicates, check_retractions) take `library="group:<id>"`; their zotero:// links then point into the group. The write tools have no library argument, and the client refuses a write while a group is being read.
 
 `get_figure` cuts a figure or table out of an item's PDF and saves it as a PNG in `Literature/figures/` of the vault, for a note. The caption is the anchor ("Figure 2.", "Table 1:"): a figure is the graphics next to its caption, a table runs between its rules. When neither can be found, it takes the whole page and says so. It reads the PDF on this computer with pypdfium2 and changes nothing in the library.
+
+`get_annotations` lists the highlights, underlines, notes and comments of an item's files in reading order, with the page label and a zotero://open-pdf link to each. Zotero 10's local API does not list annotations as children of a file, so the tool reads all annotations of the library and keeps those of the item.
+
+`get_selected_items` reads what is selected in the Zotero window, or the paper open in the reader tab. It needs the gam plugin, 0.4.0 or later (`GET /gam/selection` on 127.0.0.1:23119). `show_in_zotero` opens `zotero://select/...` (macOS `open`).
+
+`export_markdown` writes one Markdown file for each item (metadata, abstract, manual tags, child notes, annotations, indexed full text), so that an agent reads or greps files instead of many get_fulltext calls. The default folder is `~/.local/share/zotero-local-mcp/export`. A folder in the vault is refused. A file is replaced only when its frontmatter has `zotero-export: true`, so other files are never overwritten.
+
+Long calls (import_identifiers, repair_metadata, check_retractions, attach_oa_pdfs, export_markdown) return `{"status": "running", "job_id": ...}` after `ZOTERO_JOB_WAIT` seconds (default 45), and the work goes on in the server. `get_job` gives the result. A restart of the server forgets the jobs.
 
 ## Requirements
 
@@ -78,6 +88,7 @@ Settings come from environment variables or from the file named by `ZOTERO_MCP_E
 | `GOOGLE_BOOKS_API_KEY` | Optional: without it Google Books shares one daily quota among all users, which runs out. |
 | `ZOTERO_API_URL` | Default `http://127.0.0.1:23119/api`. |
 | `ZOTERO_AGENT_MARKER` | Review marker tag, default `_agent`. |
+| `ZOTERO_JOB_WAIT` | Seconds before a long call returns a job id, default 45. |
 | `ZOTERO_MCP_STATE` | Journal, write key, caches. Default `~/.local/share/zotero-local-mcp`. |
 
 ## Vocabulary file
